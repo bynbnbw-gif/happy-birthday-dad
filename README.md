@@ -1,19 +1,134 @@
-
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>יום הולדת שמח, ינאי!</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Custom Hebrew Font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase Imports for Firestore and Auth -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // הגדרות גלובליות מסביבת העבודה (חובה להשתמש בהן)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        window.db = null;
+        window.auth = null;
+        window.currentUserId = null;
+        window.collectionPath = `artifacts/${appId}/public/data/birthday_blessings`;
+
+        // אתחול Firebase והתחברות
+        async function initFirebase() {
+            try {
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase configuration is missing.");
+                    return;
+                }
+
+                const app = initializeApp(firebaseConfig);
+                window.db = getFirestore(app);
+                window.auth = getAuth(app);
+                setLogLevel('Debug'); // להצגת לוגים מפורטים ב-Console
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(window.auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+
+                onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        window.currentUserId = user.uid;
+                        console.log("User authenticated. UID:", window.currentUserId);
+                    } else {
+                        // אם אין אימות, עדיין נשתמש במזהה זמני לקריאה (למרות שרק משתמשים מאומתים יכולים לכתוב)
+                        window.currentUserId = crypto.randomUUID();
+                        console.log("Anonymous user ID generated:", window.currentUserId);
+                    }
+                    // מתחילים להאזין לברכות רק לאחר סיום האימות הראשוני
+                    listenForBlessings();
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase or signing in:", error);
+                document.getElementById('success-message').textContent = 'שגיאת התחברות למערכת. נסה לרענן.';
+                document.getElementById('success-message').classList.remove('hidden', 'text-green-600');
+                document.getElementById('success-message').classList.add('text-red-600');
+            }
+        }
+        
+        // פונקציית האזנה לנתונים והצגתם
+        function listenForBlessings() {
+            if (!window.db) return;
+
+            const q = query(collection(window.db, window.collectionPath));
+
+            onSnapshot(q, (snapshot) => {
+                const blessingsContainer = document.getElementById('blessings-container');
+                const galleryContainer = document.getElementById('gallery-container');
+                
+                // מנקים רק את הברכות והתמונות שנוספו דינמית (משאירים את הסטטיות)
+                const dynamicElements = document.querySelectorAll('.dynamic-item');
+                dynamicElements.forEach(el => el.remove());
+
+                const allBlessings = [];
+                snapshot.forEach((doc) => {
+                    allBlessings.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // ממיינים בצד הלקוח לפי חותמת הזמן (העדפה על פני orderBy ב-Firestore)
+                allBlessings.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+
+                allBlessings.forEach(data => {
+                    // הצגת הברכה
+                    if (data.blessingText) {
+                        const newBlessing = document.createElement('blockquote');
+                        newBlessing.classList.add('dynamic-item');
+                        newBlessing.innerHTML = `
+                            <p>"${data.blessingText}"</p>
+                            <footer>- ${data.senderName || 'אנונימי'}</footer>
+                        `;
+                        blessingsContainer.appendChild(newBlessing);
+                    }
+
+                    // הצגת התמונה
+                    if (data.base64Image) {
+                        const newImageContainer = document.createElement('div');
+                        newImageContainer.className = 'bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300 dynamic-item';
+                        newImageContainer.innerHTML = `
+                            <img src="${data.base64Image}" alt="תמונה מ-${data.senderName}" class="w-full h-48 object-cover">
+                            <p class="p-3 text-center text-slate-600">תמונה חדשה מ: ${data.senderName || 'אנונימי'}</p>
+                        `;
+                        galleryContainer.appendChild(newImageContainer);
+                    }
+                });
+                
+                // גלילה למטה לברכה האחרונה שהתווספה
+                blessingsContainer.scrollTop = blessingsContainer.scrollHeight;
+            }, (error) => {
+                console.error("Error fetching data:", error);
+            });
+        }
+        
+        window.initFirebase = initFirebase;
+    </script>
+
     <style>
         body {
             font-family: 'Assistant', sans-serif;
             overflow-x: hidden; /* מונע גלילה אופקית בגלל הקונפטי */
         }
+        /* עיצוב קונפטי */
         .confetti {
             position: fixed;
             width: 10px;
@@ -23,6 +138,7 @@
             border-radius: 50%;
             animation: fall 5s linear infinite;
             top: -20px; /* מתחיל מעל המסך */
+            z-index: 10;
         }
         @keyframes fall {
             to {
@@ -30,12 +146,17 @@
                 opacity: 0;
             }
         }
+        /* עיצוב הברכות (blockquote) */
         blockquote {
             background-color: #f8fafc;
             border-right: 5px solid #0ea5e9;
             padding: 1rem 1.5rem;
             margin: 1.5rem 0;
             border-radius: 0 8px 8px 0;
+            transition: all 0.3s ease-in-out;
+        }
+        blockquote:hover {
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         blockquote p {
             font-style: italic;
@@ -61,7 +182,7 @@
         </header>
 
         <main>
-            <!-- קטע ברכה אישית -->
+            <!-- קטע ברכה אישית - עדכנו כאן את השם שלכם! -->
             <section class="bg-white rounded-lg shadow-lg p-6 md:p-8 mb-8 text-center">
                 <h2 class="text-2xl font-bold mb-4 text-sky-800">ברכה אישית ממני</h2>
                 <p class="text-lg leading-relaxed">
@@ -69,60 +190,65 @@
                     אני כל כך מעריך את כל מה שעשית ואתה עושה בשבילי ובשביל כולנו. מאחל לך שנים רבות של בריאות, אושר, נחת והגשמת כל החלומות.
                     אוהב המון,
                 </p>
-                <p class="mt-4 font-bold text-xl">- השם שלך -</p>
+                <p class="mt-4 font-bold text-xl">- [השם שלך] -</p>
             </section>
 
-            <!-- אזור הברכות - יתמלא דינמית -->
-            <section id="blessings-container" class="mb-8">
-                <!-- ברכות שיתווספו על ידי משתמשים יופיעו כאן -->
+            <!-- אזור הברכות הדינמיות -->
+            <h2 class="text-3xl font-bold text-center mb-6 text-sky-800">כל הברכות המרגשות!</h2>
+            <section id="blessings-container" class="mb-8 p-4 bg-white rounded-lg shadow-inner max-h-96 overflow-y-auto">
+                <p class="text-center text-slate-500 italic" id="loading-message">...טוען ברכות עדכניות</p>
             </section>
 
             <!-- גלריית תמונות -->
             <section class="mb-8">
-                <h2 class="text-3xl font-bold text-center mb-6 text-sky-800">גלריית זיכרונות</h2>
+                <h2 class="text-3xl font-bold text-center mb-6 text-sky-800">גלריית זיכרונות משותפת</h2>
                 <div id="gallery-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    <!-- תמונות קיימות -->
+                    <!-- תמונות סטטיות קיימות -->
                     <div class="bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300">
-                        <img src="https://placehold.co/600x400/3498db/ffffff?text=תמונה+משפחתית" alt="תמונה משפחתית" class="w-full h-48 object-cover">
+                        <img src="https://placehold.co/600x400/3498db/ffffff?text=תמונה+משפחתית" alt="תמונה משפחתית" class="w-full h-48 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/600x400/3498db/ffffff?text=Loading+Error'">
                         <p class="p-3 text-center text-slate-600">תיאור קצר של התמונה</p>
                     </div>
                     <div class="bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300">
-                        <img src="https://placehold.co/600x400/e74c3c/ffffff?text=תמונה+מטיול" alt="תמונה מטיול" class="w-full h-48 object-cover">
+                        <img src="https://placehold.co/600x400/e74c3c/ffffff?text=תמונה+מטיול" alt="תמונה מטיול" class="w-full h-48 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/600x400/e74c3c/ffffff?text=Loading+Error'">
                         <p class="p-3 text-center text-slate-600">עוד זיכרון מתוק</p>
                     </div>
                     <div class="bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300">
-                        <img src="https://placehold.co/600x400/2ecc71/ffffff?text=תמונה+מצחיקה" alt="תמונה מצחיקה" class="w-full h-48 object-cover">
+                        <img src="https://placehold.co/600x400/2ecc71/ffffff?text=תמונה+מצחיקה" alt="תמונה מצחיקה" class="w-full h-48 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/600x400/2ecc71/ffffff?text=Loading+Error'">
                         <p class="p-3 text-center text-slate-600">וכמובן תמונה מצחיקה</p>
                     </div>
-                     <!-- תמונות שיתווספו על ידי משתמשים יופיעו כאן -->
+                    <!-- תמונות שיתווספו על ידי משתמשים יופיעו כאן באופן דינמי -->
                 </div>
             </section>
 
-             <!-- טופס הוספת ברכה ותמונה -->
+            <!-- טופס הוספת ברכה ותמונה -->
             <section class="bg-sky-50 rounded-lg shadow-lg p-6 md:p-8 text-center border-2 border-sky-200">
                 <h2 class="text-2xl font-bold mb-4 text-sky-800">הוסיפו ברכה ותמונה משלכם!</h2>
                 <form id="blessing-form" class="flex flex-col gap-4 max-w-lg mx-auto text-right">
-                    <input type="text" id="sender-name" placeholder="השם שלכם" class="w-full p-2 border border-slate-300 rounded-md" required>
-                    <textarea id="blessing-text" placeholder="הברכה שלכם..." rows="4" class="w-full p-2 border border-slate-300 rounded-md"></textarea>
+                    <input type="text" id="sender-name" placeholder="השם שלכם (חובה)" class="w-full p-2 border border-slate-300 rounded-md" required>
+                    <textarea id="blessing-text" placeholder="הברכה שלכם... (חובה)" rows="4" class="w-full p-2 border border-slate-300 rounded-md" required></textarea>
                     <div>
-                        <label for="image-upload" class="block mb-2 font-medium">רוצים להוסיף גם תמונה?</label>
+                        <label for="image-upload" class="block mb-2 font-medium">רוצים להוסיף גם תמונה? (אופציונלי)</label>
                         <input type="file" id="image-upload" accept="image/*" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-100 file:text-sky-700 hover:file:bg-sky-200">
+                        <p class="text-xs text-slate-500 mt-1">שימו לב: גודל תמונה מוגבל מאוד לצורך שמירה במסד הנתונים.</p>
                     </div>
-                    <button type="submit" class="bg-sky-600 text-white font-bold py-3 px-8 rounded-full hover:bg-sky-700 transition-colors duration-300 text-lg shadow-md w-full">
+                    <button type="submit" id="submit-button" class="bg-sky-600 text-white font-bold py-3 px-8 rounded-full hover:bg-sky-700 transition-colors duration-300 text-lg shadow-md w-full">
                         הוסיפו את הברכה
                     </button>
                 </form>
-                <p id="success-message" class="text-green-600 mt-4 font-bold hidden">תודה! הברכה נוספה בהצלחה.</p>
+                <p id="success-message" class="text-green-600 mt-4 font-bold hidden">תודה! הברכה נוספה בהצלחה, מתעדכן...</p>
             </section>
         </main>
         
         <footer class="text-center mt-12 mb-6">
-            <p class="text-slate-500">נבנה באהבה על ידי <span class="font-bold">השם שלך</span>, 2025</p>
+            <p class="text-slate-500">נבנה באהבה על ידי [השם שלך], 2025</p>
         </footer>
 
     </div>
 
-    <script>
+    <script type="module">
+        // הפעלת אתחול Firebase
+        window.initFirebase();
+
         // סקריפט קונפטי
         document.addEventListener('DOMContentLoaded', () => {
             const container = document.getElementById('confetti-container');
@@ -139,52 +265,115 @@
                 confetti.style.height = `${size}px`;
                 container.appendChild(confetti);
             }
+            
+            // הסרת הודעת הטעינה לאחר שהנתונים מתחילים להיטען
+            const loadingMessage = document.getElementById('loading-message');
+            if (loadingMessage) {
+                 loadingMessage.remove();
+            }
         });
 
-        // סקריפט לטופס הוספת ברכה
+        // פונקציה להמרת קובץ תמונה ל-Base64
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = (error) => reject(error);
+            });
+        }
+
+        // לוגיקה לשליחת טופס ל-Firestore
         const blessingForm = document.getElementById('blessing-form');
-        const blessingsContainer = document.getElementById('blessings-container');
-        const galleryContainer = document.getElementById('gallery-container');
         const successMessage = document.getElementById('success-message');
+        const submitButton = document.getElementById('submit-button');
 
-        blessingForm.addEventListener('submit', function(event) {
+        blessingForm.addEventListener('submit', async function(event) {
             event.preventDefault();
+            
+            if (!window.db) {
+                console.error("Firestore not initialized.");
+                return;
+            }
 
-            const senderName = document.getElementById('sender-name').value;
-            const blessingText = document.getElementById('blessing-text').value;
+            // מציג הודעת טעינה ומשבית כפתור
+            submitButton.disabled = true;
+            submitButton.textContent = '...שולח ברכה';
+            successMessage.classList.add('hidden');
+            
+            const senderName = document.getElementById('sender-name').value.trim();
+            const blessingText = document.getElementById('blessing-text').value.trim();
             const imageFile = document.getElementById('image-upload').files[0];
 
-            // הוספת הברכה
-            if (blessingText.trim() !== '') {
-                const newBlessing = document.createElement('blockquote');
-                newBlessing.innerHTML = `
-                    <p>"${blessingText}"</p>
-                    <footer>- ${senderName}</footer>
-                `;
-                blessingsContainer.appendChild(newBlessing);
+            if (!senderName || !blessingText) {
+                // לא אמור לקרות בגלל required, אבל לוודא
+                submitButton.disabled = false;
+                submitButton.textContent = 'הוסיפו את הברכה';
+                return;
             }
 
-            // הוספת התמונה
+            let base64Image = null;
             if (imageFile) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const newImageContainer = document.createElement('div');
-                    newImageContainer.className = 'bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300';
-                    newImageContainer.innerHTML = `
-                        <img src="${e.target.result}" alt="תמונה מ-${senderName}" class="w-full h-48 object-cover">
-                        <p class="p-3 text-center text-slate-600">תמונה חדשה מ: ${senderName}</p>
-                    `;
-                    galleryContainer.appendChild(newImageContainer);
+                try {
+                    // Base64 מאפשר אחסון תמונה ישירות ב-Firestore.
+                    // שימו לב: יש מגבלה של 1MB לגודל המסמך.
+                    base64Image = await fileToBase64(imageFile);
+                } catch (error) {
+                    console.error("Error converting image to Base64:", error);
+                    // נמשיך בלי התמונה אם יש שגיאה
                 }
-                reader.readAsDataURL(imageFile);
             }
-            
-            // הצגת הודעת הצלחה ואיפוס הטופס
-            successMessage.classList.remove('hidden');
-            setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
-            blessingForm.reset();
+
+            const blessingData = {
+                senderName: senderName,
+                blessingText: blessingText,
+                base64Image: base64Image,
+                timestamp: window.firebase.firestore.FieldValue.serverTimestamp() || Date.now(), // חותמת זמן לצורך מיון
+                userId: window.currentUserId
+            };
+
+            try {
+                // שמירת הברכה בקולקציה הציבורית
+                await window.firebase.firestore.addDoc(window.firebase.firestore.collection(window.db, window.collectionPath), blessingData);
+                
+                successMessage.classList.remove('hidden', 'text-red-600');
+                successMessage.classList.add('text-green-600');
+                successMessage.textContent = 'תודה! הברכה נוספה בהצלחה, מתעדכן...';
+                blessingForm.reset(); // איפוס הטופס
+            } catch (error) {
+                console.error("Error adding document:", error);
+                successMessage.classList.remove('hidden', 'text-green-600');
+                successMessage.classList.add('text-red-600');
+                successMessage.textContent = 'שגיאה בשמירת הברכה. בדקו את הקונסול (Console).';
+            } finally {
+                // החזרת הכפתור למצב רגיל
+                submitButton.disabled = false;
+                submitButton.textContent = 'הוסיפו את הברכה';
+                // הסתרת הודעת ההצלחה לאחר 3 שניות
+                setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
+            }
+        });
+        
+    </script>
+    <!-- נשתמש ב-namespace גלובלי עבור Firestore כדי לעקוף בעיות ייבוא בסביבה מודולרית -->
+    <script>
+        window.firebase = {
+            firestore: {
+                collection: (db, path) => window.firebase.firestore.getFirestoreModule().collection(db, path),
+                addDoc: (collectionRef, data) => window.firebase.firestore.getFirestoreModule().addDoc(collectionRef, data),
+                FieldValue: { serverTimestamp: () => window.firebase.firestore.getFirestoreModule().serverTimestamp() },
+                getFirestoreModule: () => {
+                    // גישה למודול Firestore לאחר שנטען
+                    return window.db.__private__.exports.firestore; 
+                }
+            }
+        };
+
+        // תיקון זמני לגישה ל-serverTimestamp
+        const dbPromise = import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+        dbPromise.then(mod => {
+            window.firebase.firestore.getFirestoreModule = () => mod;
         });
     </script>
-
 </body>
 </html>
