@@ -30,9 +30,17 @@
 
         // אתחול Firebase והתחברות
         async function initFirebase() {
+            const statusEl = document.getElementById('status-message');
+            statusEl.textContent = '...מאתחל חיבור למסד הנתונים';
+            statusEl.classList.remove('hidden', 'text-red-600');
+            statusEl.classList.add('text-yellow-600');
+
             try {
                 if (Object.keys(firebaseConfig).length === 0) {
                     console.error("Firebase configuration is missing.");
+                    statusEl.textContent = 'שגיאה: הגדרות Firebase חסרות.';
+                    statusEl.classList.remove('text-yellow-600');
+                    statusEl.classList.add('text-red-600');
                     return;
                 }
 
@@ -40,6 +48,11 @@
                 window.db = getFirestore(app);
                 window.auth = getAuth(app);
                 setLogLevel('Debug'); // להצגת לוגים מפורטים ב-Console
+                
+                // עדכון סטטוס לאחר אתחול מוצלח
+                statusEl.textContent = 'ממתין לאימות משתמש...';
+                statusEl.classList.remove('text-yellow-600');
+                statusEl.classList.add('text-blue-600');
 
                 if (initialAuthToken) {
                     await signInWithCustomToken(window.auth, initialAuthToken);
@@ -48,12 +61,24 @@
                 }
 
                 onAuthStateChanged(window.auth, (user) => {
+                    const userIdDisplayEl = document.getElementById('user-id-display');
+
                     if (user) {
                         window.currentUserId = user.uid;
                         console.log("User authenticated. UID:", window.currentUserId);
+                        userIdDisplayEl.textContent = `מזהה משתמש: ${window.currentUserId}`;
+                        statusEl.textContent = 'מחובר בהצלחה. טוען ברכות.';
+                        statusEl.classList.remove('text-blue-600');
+                        statusEl.classList.add('text-green-600');
+                        userIdDisplayEl.classList.remove('hidden');
                     } else {
                         window.currentUserId = crypto.randomUUID();
                         console.log("Anonymous user ID generated:", window.currentUserId);
+                        userIdDisplayEl.textContent = `מזהה משתמש זמני: ${window.currentUserId}`;
+                        statusEl.textContent = 'מחובר כאנונימי. טוען ברכות.';
+                        statusEl.classList.remove('text-blue-600');
+                        statusEl.classList.add('text-green-600');
+                        userIdDisplayEl.classList.remove('hidden');
                     }
                     // מתחילים להאזין לברכות רק לאחר סיום האימות הראשוני
                     listenForBlessings();
@@ -65,6 +90,11 @@
                 errorEl.textContent = 'שגיאת התחברות למערכת. נסה לרענן.';
                 errorEl.classList.remove('hidden', 'text-green-600');
                 errorEl.classList.add('text-red-600');
+                
+                // עדכון סטטוס שגיאה
+                statusEl.textContent = 'שגיאה חמורה: נכשל אתחול Firebase.';
+                statusEl.classList.remove('hidden', 'text-yellow-600', 'text-blue-600', 'text-green-600');
+                statusEl.classList.add('text-red-600');
             }
         }
         
@@ -292,6 +322,9 @@
         <header class="text-center my-8 md:my-12">
             <h1 class="text-4xl md:text-6xl font-bold text-sky-600">יום הולדת שמח, ינאי!</h1>
             <p class="text-2xl md:text-3xl mt-4 text-slate-600">חוגגים לך יום הולדת 44!</p>
+            <!-- ניטור סטטוס חיבור - נוסף משוב ויזואלי מיידי -->
+            <div id="status-message" class="text-sm mt-2 text-red-500 font-semibold hidden"></div>
+            <p id="user-id-display" class="text-xs text-slate-400 mt-2 hidden">מזהה משתמש:</p>
         </header>
 
         <main>
@@ -353,7 +386,8 @@
         </main>
         
         <footer class="text-center mt-12 mb-6">
-            <p class="text-slate-500">נבנה באהבה על ידי [השם שלך], 2025</p>
+            <!-- הוספתי רווח חסר משמעות כדי לכפות רענון קשיח -->
+            <p class="text-slate-500">נבנה באהבה על ידי [השם שלך], 2025 </p>
         </footer>
 
     </div>
