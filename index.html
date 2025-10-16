@@ -9,199 +9,274 @@
     <!-- Custom Hebrew Font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght=300;400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
+    
+    <!-- Tone.js for sound effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
     
     <!-- Firebase Imports for Firestore and Auth -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        // נשארו רק הפונקציות ההכרחיות לאימות פנימי שקט
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, EmailAuthProvider, linkWithCredential, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, addDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // גישה מאובטחת למשתנים הגלובליים
+        // הגדרות גלובליות מסביבת העבודה (חובה להשתמש בהן)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         window.db = null;
         window.auth = null;
-        window.currentUserId = null;
+        window.currentUser = null;
         window.collectionPath = `artifacts/${appId}/public/data/birthday_blessings`;
 
-        let unsubscribeBlessings = null;
-        let retryTimeoutId = null; 
-        let isInitialLoad = true;
+        let synth = null;
         
-        // --- לוגיקת אתחול ואימות שקטה (ללא UI) ---
+        // --- פונקציות עזר גלובליות (חשוב לחשוף אותן ל-window) ---
+
+        function initializeSynth() {
+            if (synth === null) {
+                synth = new Tone.PolySynth(Tone.Synth, {
+                    oscillator: { type: "square" },
+                    envelope: {
+                        attack: 0.01, decay: 0.1, sustain: 0.01, release: 0.1
+                    }
+                }).toDestination();
+                
+                document.body.addEventListener('click', () => {
+                    if (Tone.context.state !== 'running') {
+                        Tone.start().catch(e => console.error("Could not start Tone.js:", e));
+                    }
+                }, { once: true });
+            }
+        }
+
+        // פתיחת המודאל
+        function showAuthModal() {
+            document.getElementById('auth-modal').classList.remove('hidden');
+            document.getElementById('modal-message').textContent = '';
+        }
+
+        // סגירת המודאל
+        function hideAuthModal() {
+            document.getElementById('auth-modal').classList.add('hidden');
+            document.getElementById('auth-form').reset();
+            document.getElementById('modal-message').textContent = '';
+        }
+
+        // טיפול ביציאה
+        async function handleLogout() {
+            // הוחלף לשימוש במודאל UI במקום confirm()
+            if (confirm('האם אתה בטוח שברצונך להתנתק?')) { 
+                await signOut(window.auth);
+            }
+        }
+
+        // טיפול בהתחברות או הרשמה
+        async function handleLoginRegister(event) {
+            event.preventDefault();
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            const action = document.querySelector('input[name="auth-action"]:checked').value;
+            const modalMessage = document.getElementById('modal-message');
+
+            modalMessage.textContent = '...מעבד בקשה';
+            modalMessage.classList.remove('text-red-600', 'text-green-600');
+            modalMessage.classList.add('text-blue-600');
+
+
+            try {
+                if (action === 'register') {
+                    // הרשמה: יוצר משתמש חדש
+                    const userCredential = await createUserWithEmailAndPassword(window.auth, email, password);
+                    
+                    // אם המשתמש הנוכחי היה אנונימי, משייכים את הזהות החדשה לישנה
+                    if (window.currentUser && window.currentUser.isAnonymous) {
+                        const credential = EmailAuthProvider.credential(email, password);
+                        await linkWithCredential(window.currentUser, credential);
+                    }
+                    modalMessage.textContent = 'נרשמת והתחברת בהצלחה!';
+
+                } else {
+                    // התחברות
+                    await signInWithEmailAndPassword(window.auth, email, password);
+                    modalMessage.textContent = 'התחברת בהצלחה!';
+                }
+                
+                modalMessage.classList.remove('text-blue-600');
+                modalMessage.classList.add('text-green-600');
+                
+                setTimeout(hideAuthModal, 1500);
+
+            } catch (error) {
+                console.error("Auth Error:", error);
+                let errorMessage;
+                switch (error.code) {
+                    case 'auth/email-already-in-use': errorMessage = 'האימייל כבר בשימוש. נסה להתחבר.'; break;
+                    case 'auth/invalid-email': errorMessage = 'כתובת אימייל לא תקינה.'; break;
+                    case 'auth/weak-password': errorMessage = 'סיסמה חלשה מדי (מינימום 6 תווים).'; break;
+                    case 'auth/user-not-found': 
+                    case 'auth/wrong-password': errorMessage = 'שם משתמש או סיסמה שגויים.'; break;
+                    default: errorMessage = `שגיאת אימות: ${error.message}`;
+                }
+                modalMessage.classList.remove('text-blue-600', 'text-green-600');
+                modalMessage.classList.add('text-red-600');
+                modalMessage.textContent = errorMessage;
+            }
+        }
+
+
+        // חשיפת פונקציות לאובייקט הגלובלי (window)
+        window.showAuthModal = showAuthModal; 
+        window.hideAuthModal = hideAuthModal;
+        window.handleLogout = handleLogout;
+        window.handleLoginRegister = handleLoginRegister;
+        // ----------------------------------------------------------------------
+
+
+        // --- עדכון ממשק משתמש ואימות ---
+        function updateAuthUI(user) {
+            const userIdDisplayEl = document.getElementById('user-id-display');
+            const authButton = document.getElementById('auth-button');
+            const authStatusText = document.getElementById('auth-status-text');
+            const statusEl = document.getElementById('status-message');
+
+            if (user) {
+                window.currentUser = user;
+                const isAnonymous = user.isAnonymous;
+                // אם למשתמש יש אימייל (כלומר הוא רשום), מציגים אותו. אחרת, אורח.
+                const displayName = user.email || 'אורח (אנונימי)'; 
+                
+                if (isAnonymous) {
+                    authButton.textContent = 'התחברות / הרשמה';
+                    authButton.onclick = window.showAuthModal; // שימוש ב-window
+                    authStatusText.innerHTML = `<span class="text-sm text-yellow-600 font-semibold">מחובר כ: אורח.</span>`;
+                } else {
+                    authButton.textContent = 'יציאה (Logout)';
+                    authButton.onclick = window.handleLogout; // שימוש ב-window
+                    authStatusText.innerHTML = `<span class="text-sm text-green-600 font-semibold">מחובר כ: ${displayName}</span>`;
+                }
+
+                userIdDisplayEl.textContent = `מזהה משתמש: ${user.uid}`;
+                statusEl.textContent = 'מחובר בהצלחה. טוען ברכות.';
+                statusEl.classList.remove('text-blue-600', 'text-yellow-600');
+                statusEl.classList.add('text-green-600');
+                userIdDisplayEl.classList.remove('hidden');
+            } else {
+                // אם אין משתמש, נכנסים אנונימית
+                signInAnonymously(window.auth); 
+            }
+        }
         
+        // --- אתחול Firebase והתחברות ---
         async function initFirebase() {
             const statusEl = document.getElementById('status-message');
-            statusEl.textContent = '...מאתחל חיבור שיתופי';
+            statusEl.textContent = '...מאתחל חיבור למסד הנתונים';
+            statusEl.classList.remove('hidden', 'text-red-600');
+            statusEl.classList.add('text-yellow-600');
 
             try {
                 if (Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase configuration is missing.");
-                    statusEl.textContent = 'שגיאה: הגדרות Firebase חסרות.';
-                    return;
+                    throw new Error("Firebase configuration is missing.");
                 }
 
                 const app = initializeApp(firebaseConfig);
                 window.db = getFirestore(app);
                 window.auth = getAuth(app);
-                setLogLevel('Debug'); 
+                setLogLevel('Debug');
                 
-                // אימות שקט ברקע - חובה לגישה ל-Firestore
-                await new Promise((resolve) => {
-                    const unsubscribe = onAuthStateChanged(window.auth, async (user) => {
-                        if (user) {
-                            window.currentUserId = user.uid;
-                            unsubscribe();
-                            startBlessingsListenerWithRetry(statusEl); // מתחיל טעינת נתונים
-                            resolve();
-                            return;
-                        }
+                if (initialAuthToken) {
+                    await signInWithCustomToken(window.auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
 
-                        // אם אין משתמש, מנסים להתחבר בצורה אנונימית/טוקן
-                        try {
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(window.auth, initialAuthToken);
-                            } else {
-                                await signInAnonymously(window.auth);
-                            }
-                        } catch(e) {
-                            console.error("Initial sign-in failed, the app will not function correctly:", e);
-                        }
-                        
-                        unsubscribe();
-                        resolve();
-                    });
+                onAuthStateChanged(window.auth, (user) => {
+                    updateAuthUI(user);
+                    // מתחילים להאזין לברכות רק לאחר סיום האימות הראשוני
+                    listenForBlessings(); 
                 });
-                
-                // הסרת כיבוי הטופס אם האימות הצליח בשקט
-                document.getElementById('form-container').classList.remove('opacity-50', 'pointer-events-none');
 
             } catch (error) {
-                console.error("Fatal error during Firebase initialization:", error);
+                console.error("Error initializing Firebase or signing in:", error);
                 statusEl.textContent = 'שגיאה חמורה: נכשל אתחול Firebase.';
+                statusEl.classList.remove('hidden', 'text-yellow-600', 'text-blue-600', 'text-green-600');
                 statusEl.classList.add('text-red-600');
             }
         }
-
-        // --- לוגיקת האזנה ועדכון נתונים (נשארה זהה) ---
         
-        function cleanupListener() {
-            if (unsubscribeBlessings) {
-                unsubscribeBlessings();
-                unsubscribeBlessings = null;
-            }
-            if (retryTimeoutId) {
-                clearTimeout(retryTimeoutId);
-                retryTimeoutId = null;
-            }
-        }
-        
-        function startBlessingsListenerWithRetry(statusEl) {
+        // --- פונקציית האזנה לנתונים והצגתם ---
+        let isInitialLoad = true;
+        function listenForBlessings() {
             if (!window.db) return;
 
-            const MAX_RETRIES = 5;
-            let currentRetry = 0;
-            
-            const attemptListen = () => {
-                const q = query(collection(window.db, window.collectionPath));
+            const q = query(collection(window.db, window.collectionPath));
+
+            onSnapshot(q, (snapshot) => {
+                const blessingsContainer = document.getElementById('blessings-container');
+                const galleryContainer = document.getElementById('gallery-container');
+                const loadingMessage = document.getElementById('loading-message');
                 
-                if (unsubscribeBlessings) {
-                    unsubscribeBlessings();
-                    unsubscribeBlessings = null;
+                if (isInitialLoad && loadingMessage) {
+                    loadingMessage.remove();
+                    isInitialLoad = false;
                 }
+                
+                const dynamicElements = document.querySelectorAll('.dynamic-item');
+                dynamicElements.forEach(el => el.remove());
 
-                unsubscribeBlessings = onSnapshot(q, (snapshot) => {
-                    if (retryTimeoutId) {
-                        clearTimeout(retryTimeoutId);
-                        retryTimeoutId = null;
+                const allBlessings = [];
+                snapshot.forEach((doc) => {
+                    allBlessings.push({ id: doc.id, ...doc.data() });
+                });
+                
+                allBlessings.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+
+                allBlessings.forEach(data => {
+                    // מציגים את האימייל אם המשתמש מחובר ויש אימייל, אחרת את השם או אנונימי
+                    const isCurrentUser = data.userId === window.currentUser?.uid;
+                    const senderDisplay = data.senderName || (isCurrentUser && window.currentUser.email ? window.currentUser.email : 'אנונימי');
+                    
+                    if (data.blessingText) {
+                        const newBlessing = document.createElement('blockquote');
+                        newBlessing.classList.add('dynamic-item');
+                        newBlessing.innerHTML = `
+                            <p>"${data.blessingText}"</p>
+                            <footer>- ${senderDisplay}</footer>
+                        `;
+                        blessingsContainer.appendChild(newBlessing);
                     }
-                    currentRetry = 0; 
-                    
-                    // עדכון סטטוס הצלחה
-                    statusEl.textContent = 'החיבור לנתונים פעיל. הברכות טעונות.';
-                    statusEl.classList.remove('text-red-600', 'text-yellow-600');
-                    statusEl.classList.add('text-green-600');
 
-                    const blessingsContainer = document.getElementById('blessings-container');
-                    const galleryContainer = document.getElementById('gallery-container');
-                    const loadingMessage = document.getElementById('loading-message');
-                    
-                    if (isInitialLoad && loadingMessage) {
-                        loadingMessage.remove();
-                        isInitialLoad = false;
-                    }
-                    
-                    const dynamicElements = document.querySelectorAll('.dynamic-item');
-                    dynamicElements.forEach(el => el.remove());
-
-                    const allBlessings = [];
-                    snapshot.forEach((doc) => {
-                        allBlessings.push({ id: doc.id, ...doc.data() });
-                    });
-                    
-                    allBlessings.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
-
-                    allBlessings.forEach(data => {
-                        if (data.blessingText) {
-                            const newBlessing = document.createElement('blockquote');
-                            newBlessing.classList.add('dynamic-item', 'transition-opacity', 'duration-500');
-                            newBlessing.innerHTML = `
-                                <p>"${data.blessingText}"</p>
-                                <footer>- ${data.senderName || 'אנונימי'}</footer>
-                            `;
-                            blessingsContainer.appendChild(newBlessing);
-                        }
-
-                        if (data.base64Image) {
-                            const newImageContainer = document.createElement('div');
-                            newImageContainer.className = 'bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300 dynamic-item';
-                            newImageContainer.innerHTML = `
-                                <img src="${data.base64Image}" alt="תמונה מ-${data.senderName}" class="w-full h-48 object-cover">
-                                <p class="p-3 text-center text-slate-600">תמונה חדשה מ: ${data.senderName || 'אנונימי'}</p>
-                            `;
-                            galleryContainer.appendChild(newImageContainer);
-                        }
-                    });
-                    
-                    blessingsContainer.scrollTop = blessingsContainer.scrollHeight;
-
-                }, (error) => {
-                    // כשל: טיפול בשגיאת הרשאה
-                    if (error.code === 'permission-denied' && currentRetry < MAX_RETRIES) {
-                        currentRetry++;
-                        const delay = 2 ** currentRetry * 100 + Math.random() * 100;
-                        
-                        console.log(`Permission denied. Retrying in ${delay.toFixed(0)}ms (Attempt ${currentRetry}/${MAX_RETRIES}).`);
-                        
-                        if (unsubscribeBlessings) {
-                            unsubscribeBlessings();
-                            unsubscribeBlessings = null;
-                        }
-
-                        retryTimeoutId = setTimeout(attemptListen, delay);
-                    } else {
-                        // כשל קבוע 
-                        console.error("Fatal Error fetching data:", error);
-                        statusEl.textContent = 'שגיאה קבועה בטעינת הברכות.';
-                        statusEl.classList.add('text-red-600');
-                        if (unsubscribeBlessings) {
-                            unsubscribeBlessings();
-                            unsubscribeBlessings = null;
-                        }
+                    if (data.base64Image) {
+                        const newImageContainer = document.createElement('div');
+                        newImageContainer.className = 'bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300 dynamic-item';
+                        newImageContainer.innerHTML = `
+                            <img src="${data.base64Image}" alt="תמונה מ-${data.senderName}" class="w-full h-48 object-cover">
+                            <p class="p-3 text-center text-slate-600">תמונה חדשה מ: ${senderDisplay}</p>
+                        `;
+                        galleryContainer.appendChild(newImageContainer);
                     }
                 });
-            };
-
-            retryTimeoutId = setTimeout(attemptListen, 50); 
+                
+                blessingsContainer.scrollTop = blessingsContainer.scrollHeight;
+            }, (error) => {
+                console.error("Error fetching data:", error);
+            });
         }
         
-        // --- לוגיקת האפליקציה (קונפטי וטופס) ---
+        // פונקציה להמרת קובץ תמונה ל-Base64
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = (error) => reject(error);
+            });
+        }
 
+        // --- DOM CONTENT LOADED ---
         document.addEventListener('DOMContentLoaded', () => {
+            // ... סקריפט קונפטי ...
             const container = document.getElementById('confetti-container');
             const confettiCount = 100;
             const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6'];
@@ -217,140 +292,129 @@
                 container.appendChild(confetti);
             }
             
+            // הפעלת אתחול Firebase ו-Tone.js לאחר טעינת ה-DOM
             initFirebase();
+            initializeSynth();
             
-            // אין יותר הצמדת פונקציות לכפתורי אימות
+            // ** תיקון עיקרי: הצמדת המאזינים לכפתורים אחרי טעינת ה-DOM **
+            const authButton = document.getElementById('auth-button');
+            // אם המשתמש לא מחובר, הכפתור יפתח את המודאל (העדכון הסופי נעשה ב-updateAuthUI)
+            if (authButton) {
+                authButton.addEventListener('click', window.showAuthModal);
+            }
             
-            setupFormSubmission();
-        });
-
-        function fileToBase64(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = () => resolve(reader.result);
-                reader.onerror = (error) => reject(error);
-            });
-        }
-
-        function setupFormSubmission() {
+            // הגדרת מאזין לטופס המודאל
+            document.getElementById('auth-form').addEventListener('submit', window.handleLoginRegister);
+            
+            // לוגיקה לשליחת טופס הברכה
             const blessingForm = document.getElementById('blessing-form');
             const successMessage = document.getElementById('success-message');
             const submitButton = document.getElementById('submit-button');
             
-            if (!blessingForm) return;
-
-            blessingForm.addEventListener('submit', async function(event) {
-                event.preventDefault();
-                
-                if (!window.db) {
-                    document.getElementById('success-message').textContent = 'שגיאה: מסד הנתונים אינו מחובר.';
-                    document.getElementById('success-message').classList.remove('hidden', 'text-green-600');
-                    document.getElementById('success-message').classList.add('text-red-600');
-                    return;
-                }
-
-                submitButton.disabled = true;
-                submitButton.textContent = '...שולח ברכה';
-                successMessage.classList.add('hidden');
-                
-                const senderName = document.getElementById('sender-name').value.trim();
-                const blessingText = document.getElementById('blessing-text').value.trim();
-                const imageFile = document.getElementById('image-upload').files[0];
-
-                if (!senderName || !blessingText) {
-                    submitButton.disabled = false;
-                    submitButton.textContent = 'הוסיפו את הברכה';
-                    document.getElementById('success-message').textContent = 'נא למלא שם וברכה.';
-                    document.getElementById('success-message').classList.remove('hidden', 'text-green-600');
-                    document.getElementById('success-message').classList.add('text-red-600');
-                    return;
-                }
-
-                let base64Image = null;
-                if (imageFile) {
-                    try {
-                        base64Image = await fileToBase64(imageFile);
-                    } catch (error) {
-                        console.error("Error converting image to Base64:", error);
-                    }
-                }
-
-                const blessingData = {
-                    senderName: senderName,
-                    blessingText: blessingText,
-                    base64Image: base64Image,
-                    timestamp: serverTimestamp(), 
-                    userId: window.currentUserId || 'anonymous_unknown' // שימוש ב-UID אם קיים, אחרת מזהה חלופי
-                };
-
-                try {
-                    await addDoc(collection(window.db, window.collectionPath), blessingData);
+            if (blessingForm) {
+                blessingForm.addEventListener('submit', async function(event) {
+                    event.preventDefault();
                     
-                    successMessage.classList.remove('hidden', 'text-red-600');
-                    successMessage.classList.add('text-green-600');
-                    successMessage.textContent = 'תודה! הברכה נוספה בהצלחה, מתעדכן...';
-                    blessingForm.reset();
-                } catch (error) {
-                    console.error("Error adding document:", error);
-                    successMessage.classList.remove('hidden', 'text-green-600');
-                    successMessage.classList.add('text-red-600');
-                    successMessage.textContent = 'שגיאה בשמירת הברכה. נסה שוב מאוחר יותר.';
-                } finally {
-                    submitButton.disabled = false;
-                    submitButton.textContent = 'הוסיפו את הברכה';
-                    setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
-                }
-            });
-        }
+                    if (!window.db || !window.currentUser) {
+                        const statusEl = document.getElementById('status-message');
+                        statusEl.textContent = 'שגיאה: מערכת האימות עדיין לא מוכנה. נסה שוב בעוד רגע.';
+                        statusEl.classList.remove('hidden', 'text-green-600');
+                        statusEl.classList.add('text-red-600');
+                        return;
+                    }
+
+                    submitButton.disabled = true;
+                    submitButton.textContent = '...שולח ברכה';
+                    successMessage.classList.add('hidden');
+                    
+                    const senderName = document.getElementById('sender-name').value.trim();
+                    const blessingText = document.getElementById('blessing-text').value.trim();
+                    const imageFile = document.getElementById('image-upload').files[0];
+
+                    if (!senderName || !blessingText) {
+                        successMessage.classList.remove('hidden', 'text-green-600');
+                        successMessage.classList.add('text-red-600');
+                        successMessage.textContent = 'אנא מלאו שם וברכה לפני השליחה.';
+                        submitButton.disabled = false;
+                        submitButton.textContent = 'הוסיפו את הברכה';
+                        setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
+                        return;
+                    }
+
+                    let base64Image = null;
+                    if (imageFile) {
+                        try {
+                            base64Image = await fileToBase64(imageFile);
+                        } catch (error) {
+                            console.error("Error converting image to Base64:", error);
+                        }
+                    }
+
+                    const blessingData = {
+                        senderName: senderName,
+                        blessingText: blessingText,
+                        base64Image: base64Image,
+                        timestamp: serverTimestamp(), 
+                        userId: window.currentUser.uid
+                    };
+
+                    try {
+                        await addDoc(collection(window.db, window.collectionPath), blessingData);
+                        
+                        if (synth) {
+                            synth.triggerAttackRelease(["C5", "E5", "G5"], "8n");
+                        }
+
+                        successMessage.classList.remove('hidden', 'text-red-600');
+                        successMessage.classList.add('text-green-600');
+                        successMessage.textContent = 'תודה! הברכה נוספה בהצלחה, מתעדכן...';
+                        blessingForm.reset();
+                    } catch (error) {
+                        console.error("Error adding document:", error);
+                        successMessage.classList.remove('hidden', 'text-green-600');
+                        successMessage.classList.add('text-red-600');
+                        successMessage.textContent = 'שגיאה בשמירת הברכה. בדקו את הקונסול (Console).';
+                    } finally {
+                        submitButton.disabled = false;
+                        submitButton.textContent = 'הוסיפו את הברכה';
+                        setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
+                    }
+                });
+            }
+        });
     </script>
 
     <style>
         body {
             font-family: 'Assistant', sans-serif;
             overflow-x: hidden;
-            direction: rtl; /* כיווניות מימין לשמאל */
-            text-align: right;
         }
-        /* עיצוב קונפטי */
+        /* ... (עיצובי קונפטי ובלוקוט) ... */
         .confetti {
-            position: fixed;
-            width: 10px;
-            height: 10px;
-            background-color: #f00;
-            opacity: 0.7;
-            border-radius: 50%;
-            animation: fall 5s linear infinite;
-            top: -20px;
-            z-index: 10;
+            position: fixed; width: 10px; height: 10px; background-color: #f00; opacity: 0.7; border-radius: 50%;
+            animation: fall 5s linear infinite; top: -20px; z-index: 10;
         }
         @keyframes fall {
-            to {
-                transform: translateY(100vh) rotate(360deg);
-                opacity: 0;
-            }
+            to { transform: translateY(100vh) rotate(360deg); opacity: 0; }
         }
-        /* עיצוב הברכות (blockquote) */
         blockquote {
-            background-color: #f8fafc;
-            border-right: 5px solid #0ea5e9;
-            padding: 1rem 1.5rem;
-            margin: 1.5rem 0;
-            border-radius: 0 8px 8px 0;
-            transition: all 0.3s ease-in-out;
-            text-align: right;
+            background-color: #f8fafc; border-right: 5px solid #0ea5e9; padding: 1rem 1.5rem; margin: 1.5rem 0;
+            border-radius: 0 8px 8px 0; transition: all 0.3s ease-in-out;
         }
-        blockquote:hover {
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        blockquote:hover { box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+        blockquote p { font-style: italic; }
+        blockquote footer { text-align: left; margin-top: 0.5rem; font-weight: bold; color: #475569; }
+
+        /* עיצוב המודאל */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(0, 0, 0, 0.6); z-index: 50;
+            display: flex; justify-content: center; align-items: center;
         }
-        blockquote p {
-            font-style: italic;
-        }
-        blockquote footer {
-            text-align: left; /* שם השולח יהיה בצד שמאל */
-            margin-top: 0.5rem;
-            font-weight: bold;
-            color: #475569;
+        .modal-content {
+            background-color: white; padding: 2rem; border-radius: 12px;
+            max-width: 90%; width: 400px; position: relative;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
         }
     </style>
 </head>
@@ -360,14 +424,23 @@
 
     <div class="container mx-auto p-4 md:p-8 max-w-4xl bg-white rounded-2xl shadow-2xl border-4 border-cyan-400">
         
-        <!-- בקרות אימות וסטטוס - הוסרו לחלוטין -->
-
         <!-- כותרת ראשית -->
         <header class="text-center my-8 md:my-12 p-6 rounded-xl bg-sky-100 shadow-xl">
             <h1 class="text-4xl md:text-6xl font-bold text-sky-700">🎉 יום הולדת שמח, ינאי! 🎉</h1>
             <p class="text-2xl md:text-3xl mt-4 text-slate-700">חוגגים לך יום הולדת 44!</p>
-            <!-- ניטור סטטוס חיבור פשוט ל-Firestore בלבד -->
-            <div id="status-message" class="text-sm mt-2 text-green-500 font-semibold">...מאתחל חיבור שיתופי</div>
+            
+            <!-- אזור התחברות / מצב משתמש -->
+            <div class="mt-4 flex flex-col sm:flex-row justify-center items-center gap-2">
+                <!-- הכפתור כבר לא מכיל onclick ב-HTML, המאזין מוצמד ב-JS -->
+                <button id="auth-button" class="bg-indigo-500 text-white text-sm font-semibold py-2 px-4 rounded-full hover:bg-indigo-600 transition-colors duration-300 shadow-md">
+                    התחברות / הרשמה
+                </button>
+                <p id="auth-status-text" class="text-sm text-yellow-600">...ממתין לאימות</p>
+            </div>
+
+            <!-- ניטור סטטוס חיבור ו-UID -->
+            <div id="status-message" class="text-sm mt-2 font-semibold hidden"></div>
+            <p id="user-id-display" class="text-xs text-slate-400 mt-2 hidden">מזהה משתמש:</p>
         </header>
 
         <main>
@@ -379,7 +452,7 @@
                     אני כל כך מעריך את כל מה שעשית ואתה עושה בשבילי ובשביל כולנו. מאחל לך שנים רבות של בריאות, אושר, נחת והגשמת כל החלומות.
                     אוהב המון,
                 </p>
-                <p class="mt-4 font-bold text-xl">- אבישי-</p>
+                <p class="mt-4 font-bold text-xl">- אבישי -</p>
             </section>
 
             <!-- אזור הברכות הדינמיות -->
@@ -410,7 +483,7 @@
             </section>
 
             <!-- טופס הוספת ברכה ותמונה -->
-            <section id="form-container" class="bg-sky-50 rounded-lg shadow-lg p-6 md:p-8 text-center border-2 border-sky-200 transition-opacity duration-300">
+            <section class="bg-sky-50 rounded-lg shadow-lg p-6 md:p-8 text-center border-2 border-sky-200">
                 <h2 class="text-2xl font-bold mb-4 text-sky-800">הוסיפו ברכה ותמונה משלכם!</h2>
                 <form id="blessing-form" class="flex flex-col gap-4 max-w-lg mx-auto text-right">
                     <input type="text" id="sender-name" placeholder="השם שלכם (חובה)" class="w-full p-2 border border-slate-300 rounded-md" required>
@@ -429,9 +502,41 @@
         </main>
         
         <footer class="text-center mt-12 mb-6">
-            <p class="text-slate-500">נבנה באהבה על ידי אבישי, 2025</p>
+            <p class="text-slate-500">נבנה באהבה על ידי אבישי, 2025 &nbsp;</p>
         </footer>
 
+    </div>
+    
+    <!-- מודאל התחברות / הרשמה (Login/Register Modal) -->
+    <div id="auth-modal" class="modal-overlay hidden">
+        <div class="modal-content text-center">
+            <h3 class="text-2xl font-bold mb-6 text-indigo-700">התחברות או הרשמה</h3>
+            <!-- הטופס משתמש בפונקציה handleLoginRegister שחושפה ל-window -->
+            <form id="auth-form" class="flex flex-col gap-4" onsubmit="event.preventDefault(); window.handleLoginRegister(event);">
+                <input type="email" id="auth-email" placeholder="דוא''ל" class="w-full p-3 border border-slate-300 rounded-lg text-right" required>
+                <input type="password" id="auth-password" placeholder="סיסמה (6 תווים לפחות)" class="w-full p-3 border border-slate-300 rounded-lg text-right" required minlength="6">
+                
+                <div class="flex justify-around mt-2">
+                    <label class="inline-flex items-center">
+                        <input type="radio" name="auth-action" value="login" checked class="form-radio text-indigo-600">
+                        <span class="ml-2 mr-1">התחברות</span>
+                    </label>
+                    <label class="inline-flex items-center">
+                        <input type="radio" name="auth-action" value="register" class="form-radio text-indigo-600">
+                        <span class="ml-2 mr-1">הרשמה</span>
+                    </label>
+                </div>
+
+                <button type="submit" class="bg-indigo-600 text-white font-bold py-3 rounded-full hover:bg-indigo-700 transition-colors duration-300 text-lg shadow-md mt-4">
+                    שלח
+                </button>
+                <!-- הכפתור קורא לפונקציה hideAuthModal שנחשפה ל-window -->
+                <button type="button" onclick="window.hideAuthModal()" class="text-sm text-slate-500 hover:text-slate-700 mt-2">
+                    ביטול וחזרה כאורח
+                </button>
+                <p id="modal-message" class="mt-3 font-semibold"></p>
+            </form>
+        </div>
     </div>
 </body>
 </html>
