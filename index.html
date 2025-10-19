@@ -1,1048 +1,1150 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ברכות יום הולדת שיתופיות</title>
-    <!-- Tailwind CSS (CDN) -->
+    <title>יום הולדת שמח, ינאי!</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- פונט עברי - Assistant -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-
-    <!-- Tone.js for sound effects -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
-
-    <!-- Firebase Imports for Firestore and Auth -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        // פונקציות מלאות לאימות משתמשים וניהול סשנים
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, EmailAuthProvider, linkWithCredential, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, addDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-
-        // הגדרות גלובליות מסביבת העבודה (חובה להשתמש בהן)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-
-        window.db = null;
-        window.auth = null;
-        window.currentUser = null;
-        window.currentUserId = null;
-        window.collectionPath = `artifacts/${appId}/public/data/birthday_blessings`;
-
-        // הגדרות Gemini API
-        const apiKey = ""; 
-        const GEMINI_TEXT_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-        const GEMINI_TTS_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
-
-
-        let synth = null;
-        let unsubscribeBlessings = null;
-        let retryTimeoutId = null; 
-        let isInitialLoad = true;
-        const MAX_RETRIES = 5;
-
-        // --- פונקציות עזר גלובליות ---
-
-        // אתחול Tone.js
-        function initializeSynth() {
-            if (synth === null) {
-                synth = new Tone.PolySynth(Tone.Synth, {
-                    oscillator: { type: "square" },
-                    envelope: {
-                        attack: 0.01, decay: 0.1, sustain: 0.01, release: 0.1
-                    }
-                }).toDestination();
-
-                // הפעלת האודיו קונטקסט בלחיצה ראשונה של המשתמש
-                document.body.addEventListener('click', () => {
-                    if (Tone.context.state !== 'running') {
-                        Tone.start().catch(e => console.error("Could not start Tone.js:", e));
-                    }
-                }, { once: true });
-            }
+    <style>
+        body {
+            font-family: 'Assistant', sans-serif;
+            overflow-x: hidden;
         }
-
-        // --- TTS Utility Functions ---
-
-        // ממיר מחרוזת base64 ל-ArrayBuffer
-        function base64ToArrayBuffer(base64) {
-            const binaryString = atob(base64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            return bytes.buffer;
-        }
-
-        // ממיר PCM (Int16Array) ל-WAV Blob - חובה להשמעת TTS
-        function pcmToWav(pcm16, sampleRate) {
-            const numChannels = 1;
-            const numSamples = pcm16.length;
-            const buffer = new ArrayBuffer(44 + numSamples * 2);
-            const dataView = new DataView(buffer);
-            
-            function writeString(view, offset, string) {
-                for (let i = 0; i < string.length; i++) {
-                    view.setUint8(offset + i, string.charCodeAt(i));
-                }
-            }
-
-            // RIFF identifier
-            writeString(dataView, 0, 'RIFF');
-            // File length
-            dataView.setUint32(4, 36 + numSamples * 2, true);
-            // RIFF type
-            writeString(dataView, 8, 'WAVE');
-            // format chunk identifier
-            writeString(dataView, 12, 'fmt ');
-            // format chunk length
-            dataView.setUint32(16, 16, true);
-            // sample format (raw)
-            dataView.setUint16(20, 1, true);
-            // channel count
-            dataView.setUint16(22, numChannels, true);
-            // sample rate
-            dataView.setUint32(24, sampleRate, true);
-            // byte rate (sample rate * block align)
-            dataView.setUint32(28, sampleRate * 2, true);
-            // block align (num channels * bytes per sample)
-            dataView.setUint16(32, numChannels * 2, true);
-            // bits per sample
-            dataView.setUint16(34, 16, true);
-            // data chunk identifier
-            writeString(dataView, 36, 'data');
-            // data chunk length
-            dataView.setUint32(40, numSamples * 2, true);
-
-            // Write PCM data
-            let offset = 44;
-            for (let i = 0; i < numSamples; i++) {
-                dataView.setInt16(offset, pcm16[i], true);
-                offset += 2;
-            }
-
-            return new Blob([dataView], { type: 'audio/wav' });
-        }
-        
-        // --- TTS API Handler (תכונה 2) ---
-        // הפונקציה מקבלת את הטקסט והכפתור (כדי לנהל מצב טעינה)
-        async function handleTextToSpeech(text, buttonElement) {
-            buttonElement.disabled = true;
-            const originalContent = buttonElement.innerHTML;
-            buttonElement.innerHTML = '<i data-lucide="volume-2" class="w-4 h-4 ml-1 animate-pulse"></i> טוען...';
-            lucide.createIcons();
-
-            try {
-                // Charon: קול ברור ואינפורמטיבי
-                const payload = {
-                    contents: [{
-                        parts: [{ text: `Say this blessing in a warm, friendly tone in Hebrew: "${text}"` }]
-                    }],
-                    generationConfig: {
-                        responseModalities: ["AUDIO"],
-                        speechConfig: {
-                            voiceConfig: {
-                                prebuiltVoiceConfig: { voiceName: "Charon" }
-                            }
-                        }
-                    }
-                };
-
-                const response = await fetch(GEMINI_TTS_API_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const result = await response.json();
-                const part = result?.candidates?.[0]?.content?.parts?.[0];
-                const audioData = part?.inlineData?.data;
-                const mimeType = part?.inlineData?.mimeType;
-
-                if (audioData && mimeType && mimeType.startsWith("audio/")) {
-                    const rateMatch = mimeType.match(/rate=(\d+)/);
-                    const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000; 
-
-                    const pcmData = base64ToArrayBuffer(audioData);
-                    const pcm16 = new Int16Array(pcmData);
-                    const wavBlob = pcmToWav(pcm16, sampleRate);
-                    const audioUrl = URL.createObjectURL(wavBlob);
-
-                    const audio = new Audio(audioUrl);
-                    audio.play().catch(e => console.error("Error playing audio:", e));
-                    
-                    audio.onended = () => {
-                        buttonElement.innerHTML = originalContent;
-                        buttonElement.disabled = false;
-                        lucide.createIcons();
-                    };
-
-                } else {
-                    throw new Error("API returned no audio data.");
-                }
-            } catch (error) {
-                console.error("TTS API Error:", error);
-                // הצגת שגיאה זמנית בכפתור
-                buttonElement.innerHTML = '<i data-lucide="volume-x" class="w-4 h-4 ml-1"></i> שגיאה';
-                buttonElement.classList.add('bg-red-500', 'hover:bg-red-600');
-                lucide.createIcons();
-                setTimeout(() => {
-                    buttonElement.innerHTML = originalContent;
-                    buttonElement.disabled = false;
-                    buttonElement.classList.remove('bg-red-500', 'hover:bg-red-600');
-                    lucide.createIcons();
-                }, 3000);
-            }
-        }
-        window.handleTextToSpeech = handleTextToSpeech; // חשיפת הפונקציה גלובלית
-        // ----------------------------------------------------------------------
-
-
-        // פתיחת המודאל
-        function showAuthModal() {
-            document.getElementById('auth-modal').classList.remove('hidden');
-            document.getElementById('modal-message').textContent = '';
-        }
-
-        // סגירת המודאל
-        function hideAuthModal() {
-            document.getElementById('auth-modal').classList.add('hidden');
-            document.getElementById('auth-form').reset();
-            document.getElementById('modal-message').textContent = '';
-        }
-
-        // טיפול ביציאה (משתמש רשום)
-        async function handleLogout() {
-            const logoutBox = document.getElementById('logout-confirmation');
-            const confirmBtn = document.getElementById('confirm-logout');
-            const cancelBtn = document.getElementById('cancel-logout');
-            
-            logoutBox.classList.remove('hidden');
-
-            confirmBtn.onclick = async () => {
-                try {
-                    await signOut(window.auth);
-                    logoutBox.classList.add('hidden');
-                } catch(e) {
-                    console.error("Logout failed:", e);
-                    logoutBox.classList.add('hidden');
-                }
-            };
-            cancelBtn.onclick = () => {
-                logoutBox.classList.add('hidden');
-            };
-        }
-
-        // טיפול בהתחברות או הרשמה
-        async function handleLoginRegister(event) {
-            event.preventDefault();
-            const email = document.getElementById('auth-email').value;
-            const password = document.getElementById('auth-password').value;
-            const action = document.querySelector('input[name="auth-action"]:checked').value;
-            const modalMessage = document.getElementById('modal-message');
-
-            modalMessage.textContent = '...מעבד בקשה';
-            modalMessage.classList.remove('text-red-600', 'text-green-600');
-            modalMessage.classList.add('text-blue-600');
-
-
-            try {
-                if (action === 'register') {
-                    // הרשמה: יוצר משתמש חדש
-                    const userCredential = await createUserWithEmailAndPassword(window.auth, email, password);
-
-                    // אם המשתמש הנוכחי היה אנונימי, משייכים את הזהות החדשה לישנה
-                    if (window.currentUser && window.currentUser.isAnonymous) {
-                        const credential = EmailAuthProvider.credential(email, password);
-                        await linkWithCredential(window.currentUser, credential);
-                    }
-                    modalMessage.textContent = 'נרשמת והתחברת בהצלחה!';
-
-                } else {
-                    // התחברות
-                    await signInWithEmailAndPassword(window.auth, email, password);
-                    modalMessage.textContent = 'התחברת בהצלחה!';
-                }
-
-                modalMessage.classList.remove('text-blue-600');
-                modalMessage.classList.add('text-green-600');
-
-                setTimeout(hideAuthModal, 1500);
-
-            } catch (error) {
-                console.error("Auth Error:", error);
-                let errorMessage;
-                switch (error.code) {
-                    case 'auth/email-already-in-use': errorMessage = 'האימייל כבר בשימוש. נסה להתחבר.'; break;
-                    case 'auth/invalid-email': errorMessage = 'כתובת אימייל לא תקינה.'; break;
-                    case 'auth/weak-password': errorMessage = 'סיסמה חלשה מדי (מינימום 6 תווים).'; break;
-                    case 'auth/user-not-found': 
-                    case 'auth/wrong-password': errorMessage = 'שם משתמש או סיסמה שגויים.'; break;
-                    default: errorMessage = `שגיאת אימות: ${error.message}`;
-                }
-                modalMessage.classList.remove('text-blue-600', 'text-green-600');
-                modalMessage.classList.add('text-red-600');
-                modalMessage.textContent = errorMessage;
-            }
-        }
-
-
-        // חשיפת פונקציות לאובייקט הגלובלי (window)
-        window.showAuthModal = showAuthModal; 
-        window.hideAuthModal = hideAuthModal;
-        window.handleLogout = handleLogout;
-        window.handleLoginRegister = handleLoginRegister;
-        // ----------------------------------------------------------------------
-
-
-        // --- עדכון ממשק משתמש ואימות ---
-        function updateAuthUI(user) {
-            const userIdDisplayEl = document.getElementById('user-id-display');
-            const authButton = document.getElementById('auth-button');
-            const authStatusText = document.getElementById('auth-status-text');
-            const statusEl = document.getElementById('status-message');
-
-            if (user) {
-                window.currentUser = user;
-                window.currentUserId = user.uid;
-                const isAnonymous = user.isAnonymous;
-                // מציגים אימייל, או אורח, או את ה-UID
-                const displayName = user.email || (isAnonymous ? 'אורח (אנונימי)' : 'משתמש רשום'); 
-
-                if (isAnonymous) {
-                    authButton.textContent = 'התחברות / הרשמה';
-                    authButton.onclick = window.showAuthModal;
-                    authStatusText.innerHTML = `<span class="text-sm text-yellow-600 font-semibold">מחובר כ: ${displayName}.</span>`;
-                } else {
-                    authButton.textContent = 'יציאה (Logout)';
-                    authButton.onclick = window.handleLogout;
-                    authStatusText.innerHTML = `<span class="text-sm text-green-600 font-semibold">מחובר כ: ${displayName}</span>`;
-                }
-
-                userIdDisplayEl.textContent = `מזהה משתמש: ${user.uid}`;
-                userIdDisplayEl.classList.remove('hidden');
-
-                // אם זה המצב הראשוני, מתחילים להאזין לנתונים
-                if (window.db && isInitialLoad) {
-                     // הסרת כיבוי הטופס
-                    document.getElementById('form-container').classList.remove('opacity-50', 'pointer-events-none');
-                    startBlessingsListenerWithRetry(statusEl); 
-                    isInitialLoad = false;
-                }
-
-            } else {
-                // המשתמש התנתק, או אימות ראשוני נכשל - מציגים מצב אורח/מתחבר
-                authStatusText.innerHTML = `<span class="text-sm text-blue-600 font-semibold">מתחבר...</span>`;
-                userIdDisplayEl.classList.add('hidden');
-            }
-        }
- 
- 
-        // --- אתחול Firebase והתחברות ---
-         async function initFirebase() {
-             const statusEl = document.getElementById('status-message');
-            statusEl.textContent = '...מאתחל חיבור שיתופי';
-            statusEl.classList.remove('hidden', 'text-red-600');
-            statusEl.classList.add('text-yellow-600');
- 
- 
-             try {
-                 if (Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase configuration is missing.");
-                    statusEl.textContent = 'שגיאה: הגדרות Firebase חסרות.';
-                    return;
-                 }
- 
- 
-                 const app = initializeApp(firebaseConfig);
-                 window.db = getFirestore(app);
-                 window.auth = getAuth(app);
-                setLogLevel('Debug');
-                
-                // 1. הפעלת מאזין לשינויים במצב האימות (כולל הצגה ב-UI והתחלת האזנה ל-Firestore)
-                onAuthStateChanged(window.auth, updateAuthUI); 
-
-                // 2. ניסיון כניסה שקטה (טוקן או אנונימי)
-                if (initialAuthToken) {
-                    await signInWithCustomToken(window.auth, initialAuthToken).catch(e => {
-                        console.warn("Custom token sign-in failed, falling back to anonymous:", e);
-                        return signInAnonymously(window.auth);
-                    });
-                } else {
-                    await signInAnonymously(window.auth);
-                }
-
-                statusEl.textContent = 'מערכת האימות פעילה.';
-                statusEl.classList.remove('text-yellow-600');
-                statusEl.classList.add('text-blue-600');
- 
-             } catch (error) {
-                console.error("Fatal error during Firebase initialization:", error);
-                 statusEl.textContent = 'שגיאה חמורה: נכשל אתחול Firebase.';
-                 statusEl.classList.add('text-red-600');
-             }
-         }
- 
- 
-        // --- פונקציית האזנה לנתונים עם ניסיון חוזר ---
-        function cleanupListener() {
-            if (unsubscribeBlessings) {
-                unsubscribeBlessings();
-                unsubscribeBlessings = null;
-            }
-            if (retryTimeoutId) {
-                clearTimeout(retryTimeoutId);
-                retryTimeoutId = null;
-            }
-        }
-
-        // לוגיקה משופרת להתמודדות עם שגיאות הרשאה וניסיון חוזר
-        function startBlessingsListenerWithRetry(statusEl) {
-             // לוודא שכל הנתונים הדרושים קיימים לפני התחלת האזנה
-             if (!window.db || !window.currentUserId) return; 
-             cleanupListener(); 
-
-            const q = query(collection(window.db, window.collectionPath));
-            let currentRetry = 0;
-
-            const attemptListen = () => {
-                // בדיקה אם הגענו למקסימום ניסיונות
-                 if (currentRetry >= MAX_RETRIES) {
-                    console.error("Fatal Error fetching data: Max retries reached.");
-                    statusEl.textContent = 'שגיאה קבועה בטעינת הברכות. בדקו הרשאות.';
-                    statusEl.classList.remove('text-green-600', 'text-yellow-600', 'text-blue-600');
-                    statusEl.classList.add('text-red-600');
-                    cleanupListener(); 
-                    return;
-                }
-
-                // אם מאזין קיים, מסירים אותו לפני שמתחילים חדש בניסיון חוזר
-                if (unsubscribeBlessings) { 
-                    unsubscribeBlessings();
-                    unsubscribeBlessings = null;
-                }
-                
-                unsubscribeBlessings = onSnapshot(q, (snapshot) => {
-                    // --- SUCCESS PATH ---
-                    
-                    // הסתרת הודעת הטעינה
-                    const loadingMessage = document.getElementById('loading-message');
-                    if (loadingMessage) loadingMessage.classList.add('hidden');
-                    
-                    if (retryTimeoutId) {
-                        clearTimeout(retryTimeoutId);
-                        retryTimeoutId = null;
-                    }
-                    currentRetry = 0; // מאפסים מונה ניסיונות
-
-                    // עדכון סטטוס הצלחה
-                    statusEl.textContent = 'החיבור לנתונים פעיל. הברכות טעונות.';
-                    statusEl.classList.remove('text-red-600', 'text-yellow-600', 'text-blue-600');
-                    statusEl.classList.add('text-green-600');
-
-                    const blessingsContainer = document.getElementById('blessings-container');
-                    const galleryContainer = document.getElementById('gallery-container');
-                    
-                    const dynamicElements = document.querySelectorAll('.dynamic-item');
-                    dynamicElements.forEach(el => el.remove());
-
-                    const allBlessings = [];
-                    snapshot.forEach((doc) => {
-                        allBlessings.push({ id: doc.id, ...doc.data() });
-                    });
-
-                    // מיון לפי חותמת זמן
-                    allBlessings.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
-
-                    allBlessings.forEach(data => {
-                        const isCurrentUser = data.userId === window.currentUserId;
-                        const senderDisplay = data.senderName || (isCurrentUser && window.currentUser.email ? window.currentUser.email : 'אנונימי');
-
-                        // 1. ברכות טקסט
-                        if (data.blessingText) {
-                            const newBlessing = document.createElement('blockquote');
-                            newBlessing.classList.add('dynamic-item', 'transition-opacity', 'duration-500');
-                            
-                            // יצירת ברכה עם כפתור נגן חדש (TTS)
-                            newBlessing.innerHTML = `
-                                <div class="flex items-start justify-between">
-                                    <p class="text-lg grow">"${data.blessingText}"</p>
-                                    <button 
-                                        data-blessing-text="${data.blessingText.replace(/"/g, '&quot;')}"
-                                        class="play-tts-button bg-purple-500 text-white p-2 rounded-full shadow-md hover:bg-purple-600 transition ml-3 flex-shrink-0" 
-                                        title="נגן ברכה">
-                                        <i data-lucide="volume-2" class="w-4 h-4"></i>
-                                    </button>
-                                </div>
-                                <footer class="text-sm font-semibold mt-2">- ${senderDisplay}</footer>
-                            `;
-                            blessingsContainer.appendChild(newBlessing);
-                        }
-
-                        // 2. תמונות
-                        if (data.base64Image) {
-                            const newImageContainer = document.createElement('div');
-                            newImageContainer.className = 'bg-white rounded-xl shadow-lg border-2 border-pink-200 overflow-hidden transform hover:scale-[1.02] transition-transform duration-300 dynamic-item';
-                            newImageContainer.innerHTML = `
-                                <img src="${data.base64Image}" alt="תמונה מ-${senderDisplay}" class="w-full h-48 object-cover object-center">
-                                <p class="p-3 text-center text-slate-600 text-sm">תמונה חדשה מ: <span class="font-bold">${senderDisplay}</span></p>
-                            `;
-                            galleryContainer.appendChild(newImageContainer);
-                        }
-                    });
-                    
-                    // הצמדת מאזינים לכפתורי ה-TTS החדשים
-                    document.querySelectorAll('.play-tts-button').forEach(button => {
-                        button.onclick = (e) => {
-                            // מונע את ההפעלה של ה-blockquote כולו אם יהיה מאזין
-                            e.stopPropagation(); 
-                            const text = button.getAttribute('data-blessing-text');
-                            window.handleTextToSpeech(text, button);
-                        };
-                    });
-
-
-                    blessingsContainer.scrollTop = blessingsContainer.scrollHeight;
-                    lucide.createIcons();
-
-
-                }, (error) => {
-                    // --- FAILURE PATH ---
-                    if (error.code === 'permission-denied') {
-                        currentRetry++;
-                        const delay = 2 ** currentRetry * 100 + Math.random() * 100;
-
-                        console.log(`Permission denied. Retrying in ${delay.toFixed(0)}ms (Attempt ${currentRetry}/${MAX_RETRIES}).`);
-
-                        unsubscribeBlessings = null; // Unsubscribed automatically on error
-                        
-                        retryTimeoutId = setTimeout(attemptListen, delay);
-
-                        // שינוי עיקרי: מציג הודעת שגיאה/ניסיון חוזר רק החל מהניסיון השני (כדי למנוע ריצוד ראשוני)
-                        if (currentRetry > 1) {
-                            statusEl.textContent = 'שגיאת הרשאה זמנית. מנסה להתחבר מחדש...';
-                            statusEl.classList.remove('text-green-600', 'text-blue-600');
-                            statusEl.classList.add('text-yellow-600');
-                        }
-
-
-                    } else {
-                        console.error("Fatal Error fetching data:", error);
-                        statusEl.textContent = `שגיאה קבועה בטעינת הברכות: ${error.code}.`;
-                        statusEl.classList.remove('text-green-600', 'text-yellow-600', 'text-blue-600');
-                        statusEl.classList.add('text-red-600');
-                        cleanupListener();
-                     }
-                 });
-            };
-
-            attemptListen();
-        }
- 
- 
-        // פונקציה להמרת קובץ תמונה ל-Base64
-        function fileToBase64(file) {
-            return new Promise((resolve, reject) => {
-                // בדיקת גודל קובץ (מקסימום 500KB כדי להימנע מבעיות ב-Firestore)
-                if (file.size > 500 * 1024) {
-                    reject(new Error("Image is too large (max 500KB allowed)."));
-                    return;
-                }
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = () => resolve(reader.result);
-                reader.onerror = (error) => reject(error);
-            });
-        }
- 
-        // --- לוגיקת Gemini API ---
-
-        // פונקציה כללית לקריאה ל-Gemini עם ניסיון חוזר אקספוננציאלי
-        async function callGeminiAPI(systemInstruction, userQuery) {
-            const MAX_RETRIES = 3;
-            for (let i = 0; i < MAX_RETRIES; i++) {
-                try {
-                    const payload = {
-                        contents: [{ parts: [{ text: userQuery }] }],
-                        systemInstruction: { parts: [{ text: systemInstruction }] },
-                    };
-
-                    const response = await fetch(GEMINI_TEXT_API_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-
-                    const result = await response.json();
-                    const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-                    if (text) {
-                        return text;
-                    } else {
-                        throw new Error("API response was missing generated text.");
-                    }
-                } catch (error) {
-                    if (i < MAX_RETRIES - 1) {
-                        const delay = 2 ** i * 500 + Math.random() * 500;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                    } else {
-                        throw error; 
-                    }
-                }
-            }
-        }
-        
-        // טיפול בלחיצה על כפתור הצעת ה-AI (תכונה 1)
-        async function handleGeminiSuggestion() {
-            const aiStatusEl = document.getElementById('ai-status-message');
-            const blessingTextarea = document.getElementById('blessing-text');
-            const senderName = document.getElementById('sender-name').value.trim();
-            const aiButton = document.getElementById('gemini-suggest-button');
-
-            // 1. נטרול כפתור והצגת סטטוס
-            aiButton.disabled = true;
-            aiButton.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 ml-2 animate-spin"></i> ...יוצר ברכה';
-            aiStatusEl.textContent = '...מייצר ברכה יצירתית ומרגשת';
-            aiStatusEl.classList.remove('hidden', 'text-red-600', 'text-green-600');
-            aiStatusEl.classList.add('text-yellow-600');
-            lucide.createIcons();
-
-
-            const name = senderName || 'אדם אנונימי';
-            
-            const systemPrompt = `אתה משורר ברכות יום הולדת יצירתי ומרגש. משימתך היא לכתוב ברכת יום הולדת קצרה ומקורית בשפה העברית. הברכה צריכה להיות באורך של 3-4 משפטים. החזר רק את טקסט הברכה עצמו, ללא כותרות, פתיחים או סימני ציטוט.`;
-            const userQuery = `כתוב ברכת יום הולדת שמחה ומיוחדת לאדם החוגג. הברכה נשלחת על ידי ${name}.`;
-
-            try {
-                const generatedText = await callGeminiAPI(systemPrompt, userQuery);
-
-                if (generatedText) {
-                    blessingTextarea.value = generatedText.trim();
-                    aiStatusEl.textContent = 'הברכה נוצרה בהצלחה. ניתן לערוך ולשלוח!';
-                    aiStatusEl.classList.remove('text-yellow-600');
-                    aiStatusEl.classList.add('text-green-600');
-                } else {
-                     throw new Error("API returned empty text.");
-                }
-            } catch (error) {
-                console.error("Gemini API Error:", error);
-                aiStatusEl.textContent = 'שגיאת AI: לא ניתן לייצר ברכה כרגע. נסה שוב מאוחר יותר.';
-                aiStatusEl.classList.remove('text-yellow-600', 'text-green-600');
-                aiStatusEl.classList.add('text-red-600');
-            } finally {
-                // 3. שיקום המצב
-                aiButton.disabled = false;
-                aiButton.innerHTML = '✨ הצעת ברכה מ-AI';
-                lucide.createIcons(); 
-                setTimeout(() => aiStatusEl.classList.add('hidden'), 5000);
-            }
-        }
-
-        // --- לוגיקת Gemini API (חדש: שינוי טון - תכונה 3) ---
-        async function handleToneChange() {
-            const toneStatusEl = document.getElementById('tone-status-message');
-            const blessingTextarea = document.getElementById('blessing-text');
-            const aiButton = document.getElementById('gemini-tone-button');
-            const selectedTone = document.getElementById('tone-select').value;
-            const currentText = blessingTextarea.value.trim();
-
-            if (!currentText) {
-                toneStatusEl.textContent = 'אנא כתוב ברכה קיימת לפני שמשנים את הטון.';
-                toneStatusEl.classList.remove('hidden', 'text-green-600', 'text-yellow-600');
-                toneStatusEl.classList.add('text-red-600');
-                setTimeout(() => toneStatusEl.classList.add('hidden'), 3000);
-                return;
-            }
-
-            // 1. נטרול כפתור והצגת סטטוס
-            aiButton.disabled = true;
-            aiButton.innerHTML = '<i data-lucide="sparkles" class="w-4 h-4 ml-2 animate-pulse"></i> ...משנה טון';
-            toneStatusEl.textContent = `...מנסח מחדש את הברכה לטון ${selectedTone}`;
-            toneStatusEl.classList.remove('hidden', 'text-red-600', 'text-green-600');
-            toneStatusEl.classList.add('text-yellow-600');
-            lucide.createIcons();
-
-
-            const systemPrompt = `אתה עורך לשוני מקצועי המתמחה בניסוח ברכות יום הולדת. משימתך היא לקחת את הברכה הנתונה ולשכתב אותה מחדש לגמרי, תוך שמירה על המסר המקורי, אך בטון ${selectedTone}. החזר רק את טקסט הברכה המשוכתבת, ללא כותרות או סימני ציטוט.`;
-            const userQuery = `שכתב את הברכה הבאה לטון ${selectedTone}: "${currentText}"`;
-
-            try {
-                const generatedText = await callGeminiAPI(systemPrompt, userQuery);
-
-                if (generatedText) {
-                    blessingTextarea.value = generatedText.trim();
-                    toneStatusEl.textContent = `הברכה שונתה בהצלחה לטון ${selectedTone}!`;
-                    toneStatusEl.classList.remove('text-yellow-600');
-                    toneStatusEl.classList.add('text-green-600');
-                } else {
-                    throw new Error("API returned empty text.");
-                }
-            } catch (error) {
-                console.error("Gemini Tone API Error:", error);
-                toneStatusEl.textContent = 'שגיאת AI: לא ניתן לשנות את הטון כרגע.';
-                toneStatusEl.classList.remove('text-yellow-600', 'text-green-600');
-                toneStatusEl.classList.add('text-red-600');
-            } finally {
-                // 3. שיקום המצב
-                aiButton.disabled = false;
-                aiButton.innerHTML = '✨ שנו טון ברכה';
-                lucide.createIcons(); 
-                setTimeout(() => toneStatusEl.classList.add('hidden'), 5000);
-            }
-        }
-        // ----------------------------------------------------------------------
-
-
-        // --- DOM CONTENT LOADED ---
-         document.addEventListener('DOMContentLoaded', () => {
-             // ... סקריפט קונפטי ...
-             const container = document.getElementById('confetti-container');
-             const confettiCount = 100;
-             const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6'];
-             for (let i = 0; i < confettiCount; i++) {
-                const confetti = document.createElement('div');
-                confetti.className = 'confetti';
-                confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
-                confetti.style.left = `${Math.random() * 100}vw`;
-                confetti.style.animationDelay = `${Math.random() * 5}s`;
-                confetti.style.animationDuration = `${3 + Math.random() * 4}s`;
-                container.appendChild(confetti);
-            }
- 
-            // הפעלת אתחול Firebase ו-Tone.js לאחר טעינת ה-DOM
-            initFirebase();
-            initializeSynth();
-
-            const authButton = document.getElementById('auth-button');
-            if (authButton) {
-                authButton.addEventListener('click', window.showAuthModal);
-            }
-
-            // הגדרת מאזין לטופס המודאל
-            document.getElementById('auth-form').addEventListener('submit', window.handleLoginRegister);
- 
-            // לוגיקה לשליחת טופס הברכה
-            setupFormSubmission();
-
-            // לוגיקה לכפתור ה-AI (יצירת טקסט)
-            document.getElementById('gemini-suggest-button').addEventListener('click', handleGeminiSuggestion);
-
-            // לוגיקה לכפתור ה-AI (שינוי טון) - חדש
-            document.getElementById('gemini-tone-button').addEventListener('click', handleToneChange);
-        });
-
-
-        function setupFormSubmission() {
-             const blessingForm = document.getElementById('blessing-form');
-             const successMessage = document.getElementById('success-message');
-             const submitButton = document.getElementById('submit-button');
- 
-            if (!blessingForm) return;
-
-            blessingForm.addEventListener('submit', async function(event) {
-                event.preventDefault();
-
-                if (!window.db || !window.currentUserId) {
-                    const statusEl = document.getElementById('status-message');
-                    statusEl.textContent = 'שגיאה: מערכת האימות עדיין לא מוכנה. נסה שוב בעוד רגע.';
-                    statusEl.classList.remove('hidden', 'text-green-600');
-                    statusEl.classList.add('text-red-600');
-                    return;
-                }
-
-                submitButton.disabled = true;
-                submitButton.textContent = '...שולח ברכה';
-                successMessage.classList.add('hidden');
-
-                const senderName = document.getElementById('sender-name').value.trim();
-                const blessingText = document.getElementById('blessing-text').value.trim();
-                const imageFile = document.getElementById('image-upload').files[0];
-
-                if (!senderName || !blessingText) {
-                    successMessage.classList.remove('hidden', 'text-green-600');
-                    successMessage.classList.add('text-red-600');
-                    successMessage.textContent = 'אנא מלאו שם וברכה לפני השליחה.';
-                    submitButton.disabled = false;
-                    submitButton.textContent = 'הוסיפו את הברכה';
-                    setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
-                    return;
-                }
-
-                let base64Image = null;
-                if (imageFile) {
-                    try {
-                        base64Image = await fileToBase64(imageFile);
-                    } catch (error) {
-                        console.error("Error converting image to Base64:", error);
-                        successMessage.classList.remove('hidden', 'text-green-600');
-                        successMessage.classList.add('text-red-600');
-                        successMessage.textContent = `שגיאה בתמונה: ${error.message}`;
-                        submitButton.disabled = false;
-                        submitButton.textContent = 'הוסיפו את הברכה';
-                        setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
-                        return;
-                    }
-                }
-
-                const blessingData = {
-                    senderName: senderName,
-                    blessingText: blessingText,
-                    base64Image: base64Image,
-                    timestamp: serverTimestamp(), 
-                    userId: window.currentUserId
-                };
-
-                try {
-                    await addDoc(collection(window.db, window.collectionPath), blessingData);
-
-                    if (synth) {
-                        // צליל הצלחה
-                        synth.triggerAttackRelease(["C5", "E5", "G5"], "8n");
-                    }
-
-                    successMessage.classList.remove('hidden', 'text-red-600');
-                    successMessage.classList.add('text-green-600');
-                    successMessage.textContent = 'תודה! הברכה נוספה בהצלחה, מתעדכן...';
-                    blessingForm.reset();
-                } catch (error) {
-                    console.error("Error adding document:", error);
-                    successMessage.classList.remove('hidden', 'text-green-600');
-                    successMessage.classList.add('text-red-600');
-                    successMessage.textContent = 'שגיאה בשמירת הברכה. נסה שוב מאוחר יותר.';
-                } finally {
-                    submitButton.disabled = false;
-                    submitButton.textContent = 'הוסיפו את הברכה';
-                    setTimeout(() => { successMessage.classList.add('hidden'); }, 3000);
-                }
-            });
-        }
-     </script>
- 
- 
-     <style>
-         body {
-             font-family: 'Assistant', sans-serif;
-             overflow-x: hidden;
-            direction: rtl; /* כיווניות מימין לשמאל */
-            text-align: right;
-            background-color: #f7fafc; /* צבע רקע בהיר */
-         }
-        /* עיצוב קונפטי */
-         .confetti {
+        /* Confetti Styles - Existing */
+        .confetti {
             position: fixed;
             width: 10px;
             height: 10px;
+            background-color: #f00;
             opacity: 0.7;
             border-radius: 50%;
             animation: fall 5s linear infinite;
             top: -20px;
-            z-index: 10;
-         }
-         @keyframes fall {
+            z-index: 1000;
+        }
+        @keyframes fall {
             to {
                 transform: translateY(100vh) rotate(360deg);
                 opacity: 0;
             }
-         }
-        /* עיצוב הברכות (blockquote) */
-         blockquote {
-            background-color: #fff;
-            border-right: 5px solid #f87171; /* ורוד בהיר */
-            padding: 1rem;
-            margin-bottom: 1rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
-            position: relative;
-            color: #4b5563;
-         }
-         blockquote p {
-            font-size: 1.125rem; /* text-lg */
-            margin-bottom: 0.5rem;
-         }
-         blockquote footer {
-            display: block;
+        }
+        /* Balloon Styles - NEW VISUAL EFFECT */
+        .balloon {
+            position: fixed;
+            width: 30px;
+            height: 40px;
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+            animation: rise 10s ease-out forwards;
+            bottom: -50px;
+            opacity: 0.8;
+            z-index: 999;
+        }
+        @keyframes rise {
+            0% { transform: translateY(0) scale(0.5); opacity: 0.8; }
+            100% { transform: translateY(-120vh) scale(1); opacity: 0; }
+        }
+
+        /* Custom Blockquote Style for Blessings */
+        .blessing-card {
+            background-color: #f8fafc;
+            border-right: 5px solid #0ea5e9;
+            padding: 1rem 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 0 8px 8px 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+        }
+        .blessing-card p {
+            font-style: italic;
+            line-height: 1.6;
+        }
+        .blessing-card footer {
             text-align: left;
-            font-style: normal;
-            color: #9ca3af;
-         }
-
-        /* עיצוב מודאל */
-        .modal-overlay {
-            background-color: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(3px);
-            z-index: 50;
+            margin-top: 0.5rem;
+            font-weight: bold;
+            color: #475569;
+            font-size: 0.95rem;
         }
-        
-        /* גלילה ימין-לשמאל */
-        .pr-3 { 
-            padding-right: 0.75rem; 
-            padding-left: 0; 
+        .spinner {
+            border: 2px solid rgba(0, 0, 0, 0.1);
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border-left-color: #fff;
+            animation: spin 1s linear infinite;
         }
-
-     </style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .speaker-btn[disabled], button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        #poem-result-container {
+            white-space: pre-wrap; /* Preserve formatting of the poem */
+            background-color: #f0f9ff;
+            border: 1px dashed #7dd3fc;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+            text-align: right;
+        }
+        /* VIP Mode Indicator */
+        .vip-mode-active {
+            border: 3px solid #ffaa00;
+            box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
+        }
+    </style>
 </head>
-<body class="min-h-screen">
-    <!-- קונפטי -->
+<body class="bg-slate-100 text-slate-800">
+
     <div id="confetti-container"></div>
-    <!-- מודאל אימות יציאה -->
-    <div id="logout-confirmation" class="hidden fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-        <div class="bg-white p-6 rounded-xl shadow-2xl text-center max-w-sm w-full mx-4" dir="rtl">
-            <h2 class="text-xl font-bold mb-4">אישור יציאה</h2>
-            <p class="mb-6">האם אתה בטוח שברצונך להתנתק? תוכל להמשיך להשתמש כאורח.</p>
-            <div class="flex justify-center space-x-4 space-x-reverse">
-                <button id="cancel-logout" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition">ביטול</button>
-                <button id="confirm-logout" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition">התנתק</button>
+    <div id="balloon-container"></div>
+
+    <!-- VIP Code Modal (New) -->
+    <div id="vip-modal" class="fixed inset-0 bg-black bg-opacity-50 z-[1001] hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm text-center">
+            <h3 class="text-2xl font-bold text-yellow-800 mb-4">כניסה למצב "אורח הכבוד"</h3>
+            <p id="vip-feedback" class="text-sm text-red-500 mb-3"></p>
+            <input type="password" id="vip-code-input" placeholder="הזן קוד סודי (5 ספרות)" class="w-full p-3 border border-slate-300 rounded-lg text-center text-lg tracking-widest" maxlength="5">
+            <div class="flex gap-3 mt-4">
+                <button id="vip-submit-btn" class="flex-1 bg-yellow-500 text-white font-bold py-2 rounded-full hover:bg-yellow-600 transition-colors">כניסה</button>
+                <button id="vip-cancel-btn" class="flex-1 bg-slate-300 text-slate-800 font-bold py-2 rounded-full hover:bg-slate-400 transition-colors">ביטול</button>
             </div>
         </div>
     </div>
-
-    <!-- מודאל אימות (התחברות/הרשמה) -->
-    <div id="auth-modal" class="hidden fixed inset-0 flex items-center justify-center modal-overlay z-40">
-        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4" dir="rtl">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold text-pink-600">אימות משתמש</h2>
-                <button onclick="window.hideAuthModal()" class="text-gray-500 hover:text-gray-700">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </button>
-            </div>
-            <form id="auth-form" class="space-y-4">
-                <div>
-                    <label for="auth-email" class="block text-sm font-medium text-gray-700">אימייל:</label>
-                    <input type="email" id="auth-email" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-pink-500 focus:border-pink-500" placeholder="האימייל שלך">
-                </div>
-                <div>
-                    <label for="auth-password" class="block text-sm font-medium text-gray-700">סיסמה (מינימום 6 תווים):</label>
-                    <input type="password" id="auth-password" required minlength="6" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-pink-500 focus:border-pink-500" placeholder="סיסמה סודית">
-                </div>
-                <div class="flex space-x-4 space-x-reverse justify-center pt-2">
-                    <label class="inline-flex items-center">
-                        <input type="radio" name="auth-action" value="login" checked class="form-radio text-pink-600 h-4 w-4">
-                        <span class="mr-2 text-sm text-gray-700">התחברות</span>
-                    </label>
-                    <label class="inline-flex items-center">
-                        <input type="radio" name="auth-action" value="register" class="form-radio text-pink-600 h-4 w-4">
-                        <span class="mr-2 text-sm text-gray-700">הרשמה</span>
-                    </label>
-                </div>
-                <button type="submit" class="w-full bg-pink-500 text-white font-bold py-3 px-4 rounded-xl hover:bg-pink-600 transition duration-200 shadow-md">בצע אימות</button>
-            </form>
-            <p id="modal-message" class="mt-4 text-center font-semibold h-5"></p>
-        </div>
-    </div>
-
-    <!-- כותרת ראשית וסטטוס -->
-    <header class="sticky top-0 bg-white bg-opacity-95 shadow-lg p-4 z-20 border-b border-pink-100" dir="rtl">
-        <div class="max-w-7xl mx-auto flex justify-between items-center flex-wrap gap-3">
-            <div class="flex-shrink-0">
-                <h1 class="text-3xl font-bold text-pink-600 flex items-center">
-                    <i data-lucide="party-popper" class="w-8 h-8 ml-2"></i>
-                    לוח ברכות יום הולדת שיתופי
-                </h1>
-            </div>
-            <div class="text-center md:text-left">
-                <p id="auth-status-text" class="text-sm font-semibold text-blue-600">...מאתחל אימות</p>
-                <p id="user-id-display" class="text-xs text-gray-500 hidden"></p>
-                <p id="status-message" class="text-sm font-semibold mt-1"></p>
-            </div>
-            <button id="auth-button" class="bg-indigo-500 text-white py-2 px-4 rounded-lg font-bold hover:bg-indigo-600 transition shadow-md">
-                התחברות / הרשמה
-            </button>
-        </div>
-    </header>
-
-    <main class="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8" dir="rtl">
+    
+    <div id="main-content-wrapper" class="container mx-auto p-4 md:p-8 max-w-4xl">
         
-        <!-- טופס הוספת ברכה (עמודה שמאלית/ימנית במובייל) -->
-        <section id="form-container" class="lg:col-span-1 bg-white p-6 rounded-xl shadow-xl h-fit sticky top-28 opacity-50 pointer-events-none transition duration-500 border-t-4 border-pink-400">
-            <h2 class="text-2xl font-bold mb-4 text-pink-700 border-b pb-2">הוסף ברכה חדשה</h2>
-            <p class="text-sm text-gray-600 mb-6">כדי לשמור על הברכה שלך באופן קבוע, מומלץ להתחבר או להירשם.</p>
-            <form id="blessing-form" class="space-y-4">
-                <div>
-                    <label for="sender-name" class="block text-sm font-medium text-gray-700">שם השולח (חובה):</label>
-                    <input type="text" id="sender-name" required class="mt-1 block w-full border border-gray-300 rounded-lg p-3" placeholder="כמו: משפחת כהן">
-                </div>
-                <div>
-                    <label for="blessing-text" class="block text-sm font-medium text-gray-700">הברכה שלך (חובה):</label>
-                    <textarea id="blessing-text" required rows="4" class="mt-1 block w-full border border-gray-300 rounded-lg p-3 resize-none" placeholder="מאחל/ת לך המון בריאות, אושר ושגשוג!"></textarea>
-                </div>
+        <header class="text-center my-8 md:my-12 relative">
+            <h1 class="text-4xl md:text-6xl font-bold text-sky-600">יום הולדת שמח, ינאי!</h1>
+            <p class="text-2xl md:text-3xl mt-4 text-slate-600">חוגגים לך יום הולדת 44!</p>
+            <p id="user-id-display" class="text-xs mt-2 text-slate-400 hidden"></p>
 
-                <!-- כפתור הצעת ברכה מ-AI (תכונה 1) -->
-                <button type="button" id="gemini-suggest-button" class="w-full bg-blue-500 text-white font-bold py-2 rounded-xl hover:bg-blue-600 transition duration-200 shadow-md flex items-center justify-center disabled:bg-blue-300">
-                    ✨ הצעת ברכה מ-AI
+            <!-- VIP Mode Button (Now calls showVIPModal) -->
+            <button id="vip-mode-toggle" class="absolute top-0 left-0 bg-yellow-500 text-white p-2 rounded-full shadow-lg hover:bg-yellow-600 transition-colors duration-300" title="מצב אורח הכבוד">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 10c0 1.1-.9 2-2 2s-2-.9-2-2.1V5c0-1.1.9-2 2-2s2 .9 2 2v4.9z"></path><path d="M6 15c0 2.2 1.8 4 4 4h4c2.2 0 4-1.8 4-4v-1h-2v1c0 1.1-.9 2-2 2h-4c-1.1 0-2-.9-2-2v-1H6v1z"></path><path d="M12 21c3.9 0 7-3.1 7-7v-3.5c0-2.3-1.2-4.4-3.2-5.7l-2.4-1.6c-1.1-.7-2.5-.7-3.6 0l-2.4 1.6c-2 1.3-3.2 3.4-3.2 5.7V14c0 3.9 3.1 7 7 7z"></path></svg>
+            </button>
+
+            <!-- VIP Stats Display (Hidden by default) -->
+            <div id="vip-stats" class="mt-4 p-3 bg-yellow-100 rounded-lg hidden">
+                <h3 class="text-xl font-bold text-yellow-800 mb-2">לוח בקרה (ינאי)</h3>
+                <div class="flex justify-around text-center">
+                    <div>
+                        <p id="total-blessings-count" class="text-2xl font-extrabold text-yellow-600">0</p>
+                        <p class="text-sm text-yellow-700">ברכות סה"כ</p>
+                    </div>
+                    <div>
+                        <p id="unique-senders-count" class="text-2xl font-extrabold text-yellow-600">0</p>
+                        <p class="text-sm text-yellow-700">שולחים ייחודיים</p>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <!-- Main Blessing -->
+            <section class="bg-white rounded-lg shadow-lg p-6 md:p-8 mb-8 text-center">
+                <div class="flex items-center justify-center gap-4 mb-4">
+                    <h2 class="text-2xl font-bold text-sky-800">ברכה אישית ממני (אבישי)</h2>
+                    <button id="speak-main-blessing" class="text-sky-600 hover:text-sky-800 speaker-btn" aria-label="הקראת הברכה">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                    </button>
+                </div>
+                <p id="main-blessing-text" class="text-lg leading-relaxed">
+                    ינאי היקר, רציתי לאחל לך את כל הטוב שבעולם. אתה האבא הכי מדהים שיש, תמיד תומך, מלמד ומצחיק.
+                    אני כל כך מעריך את כל מה שעשית ואתה עושה בשבילי ובשביל כולנו. מאחל לך שנים רבות של בריאות, אושר, נחת והגשמת כל החלומות.
+                    אוהב המון,
+                </p>
+                <p class="mt-4 font-bold text-xl">- אבישי -</p>
+            </section>
+
+            <!-- Real-time Blessings from Firestore -->
+            <section class="mb-8">
+                 <h2 class="text-3xl font-bold text-center mb-6 text-sky-800">ברכות חברים ומשפחה (בזמן אמת)</h2>
+                 
+                 <!-- Filter Input (New) -->
+                 <div class="mb-4 max-w-lg mx-auto">
+                    <input type="text" id="blessing-filter-input" placeholder="סננו ברכות לפי שם או תוכן..." class="w-full p-2 border border-slate-300 rounded-md text-right">
+                 </div>
+
+                 <div id="blessings-container" class="mb-8">
+                    <p id="loading-blessings" class="text-center text-slate-500">טוען ברכות קודמות...</p>
+                 </div>
+            </section>
+
+            <!-- Image Gallery -->
+            <section class="mb-8">
+                <h2 class="text-3xl font-bold text-center mb-6 text-sky-800">גלריית זיכרונות</h2>
+                <div id="gallery-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    <!-- Static Images (for demo/placeholders) -->
+                    <div class="bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300">
+                        <img src="https://placehold.co/600x400/3498db/ffffff?text=תמונה+משפחתית" alt="תמונה משפחתית" class="w-full h-48 object-cover">
+                        <p class="p-3 text-center text-slate-600">תיאור קצר של התמונה</p>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300">
+                        <img src="https://placehold.co/600x400/e74c3c/ffffff?text=תמונה+מטיול" alt="תמונה מטיול" class="w-full h-48 object-cover">
+                        <p class="p-3 text-center text-slate-600">עוד זיכרון מתוק</p>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300">
+                        <img src="https://placehold.co/600x400/2ecc71/ffffff?text=תמונה+מצחיקה" alt="תמונה מצחיקה" class="w-full h-48 object-cover">
+                        <p class="p-3 text-center text-slate-600">וכמובן תמונה מצחיקה</p>
+                    </div>
+                    <!-- User-submitted images will be added here dynamically -->
+                </div>
+            </section>
+            
+            <!-- AI Poem Generator -->
+            <section class="bg-white rounded-lg shadow-lg p-6 md:p-8 mb-8 text-center">
+                <h2 class="text-3xl font-bold text-center mb-6 text-purple-800">✨ מתנה מיוחדת: שיר אישי לינאי</h2>
+                <div class="max-w-lg mx-auto text-right">
+                    <label for="poem-keywords" class="block mb-2 font-medium">כתבו כמה מילים על ינאי (תחביבים, זכרונות, בדיחות...):</label>
+                    <textarea id="poem-keywords" placeholder="למשל: אוהב לדוג, אלוף בלהרכיב לגו, מספר בדיחות קרש..." rows="3" class="w-full p-2 border border-slate-300 rounded-md"></textarea>
+                    <button id="generate-poem-btn" class="mt-4 bg-purple-600 text-white font-bold py-2 px-6 rounded-full hover:bg-purple-700 transition-colors duration-300 text-base shadow-md w-full flex items-center justify-center gap-2">
+                        כתוב לי שיר
+                        <span id="poem-spinner" class="spinner hidden"></span>
+                    </button>
+                    <div id="poem-result-container" class="hidden">
+                        <div class="flex justify-between items-start">
+                            <p id="poem-text"></p>
+                            <button id="speak-poem" class="text-purple-600 hover:text-purple-800 p-2 speaker-btn" aria-label="הקראת השיר">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dream Machine - Image Generator -->
+            <section class="bg-indigo-50 rounded-lg shadow-lg p-6 md:p-8 mb-8 text-center border-2 border-indigo-200">
+                <h2 class="text-3xl font-bold text-center mb-6 text-indigo-800">✨ מכונת החלומות: הפכו זיכרון לתמונה</h2>
+                <p class="mb-4 text-slate-600">מהו הזיכרון הכי מצחיק או מיוחד שלכם עם ינאי? תארו אותו במשפט, וה-AI יהפוך אותו ליצירת אמנות!</p>
+                <div class="max-w-lg mx-auto text-right">
+                    <textarea id="dream-prompt" placeholder="לדוגמה: ינאי רוכב על חד-קרן ושר שירי יום הולדת..." rows="3" class="w-full p-2 border border-slate-300 rounded-md"></textarea>
+                    <button id="generate-dream-btn" class="mt-4 bg-indigo-600 text-white font-bold py-2 px-6 rounded-full hover:bg-indigo-700 transition-colors duration-300 text-base shadow-md w-full flex items-center justify-center gap-2">
+                        צייר לי חלום
+                        <span id="dream-spinner" class="spinner hidden"></span>
+                    </button>
+                    <div id="dream-image-container" class="mt-6 min-h-[50px]">
+                        <!-- Generated image will appear here -->
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Future Prediction Generator -->
+            <section class="bg-red-50 rounded-lg shadow-lg p-6 md:p-8 mb-8 text-center border-2 border-red-200">
+                <h2 class="text-3xl font-bold text-center mb-6 text-red-800">✨ מכונת הזמן: הצצה לעתיד של ינאי</h2>
+                <div class="max-w-lg mx-auto">
+                    <button id="generate-future-btn" class="mt-4 bg-red-600 text-white font-bold py-2 px-6 rounded-full hover:bg-red-700 transition-colors duration-300 text-base shadow-md w-full flex items-center justify-center gap-2">
+                        חזה את העתיד
+                        <span id="future-spinner" class="spinner hidden"></span>
+                    </button>
+                    <div id="future-result-container" class="mt-4 p-4 bg-red-100 border border-red-400 rounded-lg text-right hidden">
+                        <p id="future-text" class="text-lg font-medium text-red-900"></p>
+                        <button id="speak-future-btn" class="text-red-600 hover:text-red-800 p-2 speaker-btn" aria-label="הקראת הנבואה">
+                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Fun Fact Generator (Grounding) -->
+            <section class="bg-yellow-50 rounded-lg shadow-lg p-6 md:p-8 mb-8 text-center border-2 border-yellow-200">
+                <h2 class="text-3xl font-bold text-center mb-6 text-yellow-800">✨ טריוויה מיוחדת: עובדות על גיל 44</h2>
+                <div class="max-w-lg mx-auto">
+                    <button id="generate-trivia-btn" class="mt-4 bg-yellow-600 text-white font-bold py-2 px-6 rounded-full hover:bg-yellow-700 transition-colors duration-300 text-base shadow-md w-full flex items-center justify-center gap-2">
+                        מצא לי עובדה
+                        <span id="trivia-spinner" class="spinner hidden"></span>
+                    </button>
+                    <div id="trivia-result-container" class="mt-4 p-4 bg-yellow-100 border border-yellow-400 rounded-lg text-right hidden">
+                        <p id="trivia-text" class="text-lg font-medium text-yellow-900"></p>
+                        <p id="trivia-source" class="text-xs mt-2 text-slate-600"></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Add Blessing Form (Updated for Audio) -->
+            <section class="bg-sky-50 rounded-lg shadow-lg p-6 md:p-8 text-center border-2 border-sky-200">
+                <h2 class="text-2xl font-bold mb-4 text-sky-800">הוסיפו ברכה ותמונה משלכם!</h2>
+                <form id="blessing-form" class="flex flex-col gap-4 max-w-lg mx-auto text-right">
+                    <input type="text" id="sender-name" placeholder="השם שלכם" class="w-full p-2 border border-slate-300 rounded-md" required>
+                    
+                    <!-- Text Blessing Input -->
+                    <textarea id="blessing-text" placeholder="הברכה שלכם..." rows="4" class="w-full p-2 border border-slate-300 rounded-md"></textarea>
+                    
+                    <!-- AI Text Generation Button -->
+                    <button type="button" id="generate-blessing-btn" class="bg-amber-500 text-white font-bold py-2 px-4 rounded-full hover:bg-amber-600 transition-colors duration-300 text-base shadow-md w-full flex items-center justify-center gap-2">
+                        ✨ צור ברכה כתובה עם AI
+                        <span id="generate-spinner" class="spinner hidden"></span>
+                    </button>
+                    
+                    <!-- Audio Recording Controls (New) -->
+                    <div class="border p-4 rounded-lg bg-white">
+                        <label class="block mb-2 font-medium text-center">או הקליטו ברכה קולית:</label>
+                        <div class="flex justify-center gap-4">
+                            <button type="button" id="start-recording-btn" class="bg-red-500 text-white font-bold py-2 px-4 rounded-full hover:bg-red-600 transition-colors duration-300 text-sm shadow-md flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                                התחל הקלטה
+                            </button>
+                            <button type="button" id="stop-recording-btn" class="bg-slate-500 text-white font-bold py-2 px-4 rounded-full hover:bg-slate-600 transition-colors duration-300 text-sm shadow-md flex items-center gap-2" disabled>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+                                עצור הקלטה
+                            </button>
+                        </div>
+                        <p id="recording-status" class="mt-2 text-sm font-medium text-red-500 hidden text-center">מקליט... הקליקו על 'עצור' לסיום.</p>
+                        <audio id="audio-preview-player" controls class="mt-2 w-full hidden"></audio>
+                    </div>
+
+                    <!-- Image Upload -->
+                    <div>
+                        <label for="image-upload" class="block mb-2 font-medium">רוצים להוסיף גם תמונה?</label>
+                        <input type="file" id="image-upload" accept="image/*" class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-100 file:text-sky-700 hover:file:bg-sky-200">
+                    </div>
+                    <div id="image-preview-container" class="hidden text-center">
+                        <img id="image-preview" src="#" alt="תצוגה מקדימה" class="max-w-full h-auto rounded-md mx-auto mb-2 border">
+                        <input type="text" id="image-caption" placeholder="תיאור התמונה" class="w-full p-2 border border-slate-300 rounded-md mb-2">
+                        <button type="button" id="generate-caption-btn" class="bg-teal-500 text-white font-bold py-2 px-4 rounded-full hover:bg-teal-600 transition-colors duration-300 text-sm shadow-md w-full flex items-center justify-center gap-2">
+                            ✨ צור תיאור תמונה עם AI
+                            <span id="caption-spinner" class="spinner hidden"></span>
+                        </button>
+                    </div>
+                    <button type="submit" class="bg-sky-600 text-white font-bold py-3 px-8 rounded-full hover:bg-sky-700 transition-colors duration-300 text-lg shadow-md w-full">
+                        הוסיפו את הברכה (נשמר ב-Firestore!)
+                    </button>
+                </form>
+                <p id="success-message" class="text-green-600 mt-4 font-bold hidden">תודה! הברכה נוספה בהצלחה ומוצגת לכולם.</p>
+                <p id="error-message" class="text-red-600 mt-4 font-bold hidden">שגיאה בשמירת הברכה. נסו שוב.</p>
+            </section>
+        </main>
+        
+        <footer class="text-center mt-12 mb-6">
+            <p class="text-slate-500">נבנה באהבה על ידי <span class="font-bold">אבישי</span>, 2025</p>
+        </footer>
+
+    </div>
+
+    <script type="module">
+        // --- Firebase Setup ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        setLogLevel('debug'); // Enable Firestore logging
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'happy-birthday-yanai';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId = null;
+        let isAuthReady = false;
+        let allBlessings = []; // Global array to store all fetched blessings (for filtering)
+        let isVipMode = false; // VIP Mode state
+
+        // VIP Constants
+        const VIP_SECRET_CODE = '66493'; // הקוד הסודי החדש של ינאי
+        
+        // Audio Recording State
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let recordedAudioBase64 = null;
+        let recordedAudioMimeType = null;
+        const RECORDING_STATUS_ELEM = document.getElementById('recording-status');
+        const AUDIO_PREVIEW_ELEM = document.getElementById('audio-preview-player');
+
+        // VIP Modal Elements
+        const vipModal = document.getElementById('vip-modal');
+        const vipCodeInput = document.getElementById('vip-code-input');
+        const vipFeedback = document.getElementById('vip-feedback');
+
+
+        if (firebaseConfig) {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // Authentication
+            onAuthStateChanged(auth, async (user) => {
+                if (!user) {
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Firebase Auth Error:", error);
+                    }
+                }
+                userId = auth.currentUser?.uid || crypto.randomUUID();
+                document.getElementById('user-id-display').innerText = `מזהה משתמש (לשיתוף): ${userId}`;
+                document.getElementById('user-id-display').classList.remove('hidden');
+                isAuthReady = true;
+                // Once authenticated, start listening for blessings
+                if (db) {
+                    listenForBlessings();
+                }
+            });
+        }
+
+
+        // --- Gemini API Configuration ---
+        const apiKey = "";
+        const BLESSINGS_COLLECTION_PATH = `/artifacts/${appId}/public/data/brachot`;
+        
+        // --- Helper functions ---
+        function base64ToArrayBuffer(base64) { const binaryString = window.atob(base64); const len = binaryString.length; const bytes = new Uint8Array(len); for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); } return bytes.buffer; }
+        function pcmToWav(pcmData, sampleRate) { const numChannels = 1, bytesPerSample = 2, blockAlign = numChannels * bytesPerSample; const byteRate = sampleRate * blockAlign, dataSize = pcmData.length * bytesPerSample; const buffer = new ArrayBuffer(44 + dataSize); const view = new DataView(buffer); function writeString(view, offset, string) { for (let i = 0; i < string.length; i++) { view.setUint8(offset + i, string.charCodeAt(i)); } } writeString(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(view, 8, 'WAVE'); writeString(view, 12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true); view.setUint32(28, byteRate, true); view.setUint16(32, blockAlign, true); view.setUint16(34, 16, true); writeString(view, 36, 'data'); view.setUint32(40, dataSize, true); for (let i = 0; i < pcmData.length; i++) { view.setInt16(44 + i * 2, pcmData[i], true); } return new Blob([view], { type: 'audio/wav' }); }
+        
+        /** Converts a Blob to a Base64 string */
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result.split(',')[1]); // Get the base64 part
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+        
+        /** Converts Base64 string and MIME type back to a playable URL */
+        function base64ToAudioUrl(base64, mimeType) {
+            const binary = atob(base64);
+            const array = new Uint8Array(binary.length);
+            for(let i = 0; i < binary.length; i++) {
+                array[i] = binary.charCodeAt(i);
+            }
+            const blob = new Blob([array], { type: mimeType });
+            return URL.createObjectURL(blob);
+        }
+
+        // --- UI Rendering Functions ---
+        function renderBlessingCard(blessing) {
+            const container = document.getElementById('blessings-container');
+            const newBlessing = document.createElement('div');
+            const blessingId = `blessing-text-${blessing.id}`; // ID for text element
+            const audioId = `blessing-audio-${blessing.id}`; // ID for audio player
+            
+            newBlessing.id = `card-${blessing.id}`;
+            newBlessing.className = 'blessing-card';
+            
+            const timestamp = blessing.timestamp?.toDate ? blessing.timestamp.toDate().toLocaleDateString('he-IL') : 'מתישהו';
+            
+            // Audio Play Button HTML
+            const audioButtonHtml = blessing.audioBase64 ? `
+                <button id="${audioId}" class="audio-play-btn text-purple-600 hover:text-purple-800 p-2 flex-shrink-0" aria-label="הפעל ברכה קולית">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
                 </button>
-                <p id="ai-status-message" class="mt-2 text-center font-semibold text-sm hidden h-4"></p>
+            ` : '';
+
+            newBlessing.innerHTML = `
+                <div class="flex justify-between items-start gap-4">
+                    <div class="flex-1">
+                        <p id="${blessingId}" class="mb-2 text-base md:text-lg text-slate-700">${blessing.text}</p>
+                        <footer>- ${blessing.sender} (${timestamp})</footer>
+                    </div>
+                    <div class="flex gap-2">
+                        ${audioButtonHtml}
+                        <button class="text-sky-600 hover:text-sky-800 p-2 speaker-btn flex-shrink-0" aria-label="הקראת הברכה">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            // Attach text-to-speech listener
+            newBlessing.querySelector('.speaker-btn').addEventListener('click', (e) => speakText(blessingId, e.currentTarget));
+            
+            // Attach audio playback listener (if button exists)
+            if (blessing.audioBase64) {
+                newBlessing.querySelector(`#${audioId}`).addEventListener('click', (e) => playRecordedAudio(blessing.audioBase64, blessing.audioMimeType, e.currentTarget));
+            }
+            
+            container.appendChild(newBlessing);
+        }
+
+        /** Renders a list of blessings and updates VIP stats */
+        function filterAndRenderBlessings(blessingsToRender) {
+            const container = document.getElementById('blessings-container');
+            const gallery = document.getElementById('gallery-container');
+            
+            // Clear existing dynamic content
+            container.querySelectorAll('.blessing-card').forEach(el => el.remove());
+            gallery.querySelectorAll('.uploaded-image').forEach(el => el.remove());
+            
+            const uniqueSenders = new Set();
+            
+            blessingsToRender.forEach(blessing => {
+                renderBlessingCard(blessing);
+                uniqueSenders.add(blessing.sender);
                 
-                <!-- שינוי טון ברכה (תכונה 3) -->
-                <div>
-                    <label for="tone-select" class="block text-sm font-medium text-gray-700 mt-2">שנו את טון הברכה הקיימת:</label>
-                    <select id="tone-select" class="mt-1 block w-full border border-gray-300 rounded-lg p-3 focus:ring-orange-500 focus:border-orange-500">
-                        <option value="מצחיק">מצחיק ובדיחותי</option>
-                        <option value="מרגש">מרגש ונוגע ללב</option>
-                        <option value="רשמי">רשמי ומכובד</option>
-                        <option value="חגיגי ושמח" selected>חגיגי ושמח</option>
-                    </select>
-                </div>
-                <button type="button" id="gemini-tone-button" class="w-full bg-orange-500 text-white font-bold py-2 rounded-xl hover:bg-orange-600 transition duration-200 shadow-md flex items-center justify-center disabled:bg-orange-300">
-                    ✨ שנו טון ברכה
-                </button>
-                <p id="tone-status-message" class="mt-2 text-center font-semibold text-sm hidden h-4"></p>
-                <!-- סוף שינוי טון -->
+                // Render images
+                if (blessing.imageBase64) {
+                    const newImageContainer = document.createElement('div');
+                    newImageContainer.className = 'bg-white rounded-lg shadow-md overflow-hidden transform hover:scale-105 transition-transform duration-300 uploaded-image';
+                    
+                    newImageContainer.innerHTML = `
+                        <img src="${blessing.imageBase64}" alt="${blessing.imageCaption || 'תמונה חדשה'}" class="w-full h-48 object-cover">
+                        <p class="p-3 text-center text-slate-600">${blessing.imageCaption || `תמונה מ: ${blessing.sender}`}</p>
+                    `;
+                    gallery.appendChild(newImageContainer);
+                }
+            });
 
-                <div>
-                    <label for="image-upload" class="block text-sm font-medium text-gray-700">צרף תמונה קטנה (עד 500KB, אופציונלי):</label>
-                    <input type="file" id="image-upload" accept="image/*" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-pink-50 file:text-pink-700 hover:file:bg-pink-100">
-                </div>
+            // Update VIP Stats only if in VIP mode
+            if (isVipMode) {
+                document.getElementById('total-blessings-count').innerText = blessingsToRender.length;
+                document.getElementById('unique-senders-count').innerText = uniqueSenders.size;
+            }
+        }
+
+        // --- Filtering Logic ---
+        function applyFilter() {
+            const filterText = document.getElementById('blessing-filter-input').value.toLowerCase().trim();
+            if (!filterText) {
+                filterAndRenderBlessings(allBlessings); // Show all if filter is empty
+                return;
+            }
+            
+            const filtered = allBlessings.filter(blessing => 
+                blessing.sender.toLowerCase().includes(filterText) || 
+                blessing.text.toLowerCase().includes(filterText)
+            );
+            
+            filterAndRenderBlessings(filtered);
+        }
+
+
+        // --- Firestore Functions ---
+        function listenForBlessings() {
+            const loadingText = document.getElementById('loading-blessings');
+            const blessingsRef = collection(db, BLESSINGS_COLLECTION_PATH);
+            const q = query(blessingsRef);
+
+            onSnapshot(q, (snapshot) => {
+                loadingText.classList.add('hidden');
                 
-                <button type="submit" id="submit-button" class="w-full bg-pink-500 text-white font-bold py-3 rounded-xl hover:bg-pink-600 transition duration-200 shadow-lg disabled:bg-pink-300">
-                    הוסיפו את הברכה
-                </button>
-            </form>
-            <p id="success-message" class="mt-4 text-center font-semibold hidden h-5"></p>
-        </section>
+                let newBlessings = [];
+                snapshot.forEach(doc => {
+                    newBlessings.push({ ...doc.data(), id: doc.id });
+                });
+                
+                // Sort by timestamp (newest first for blessings)
+                newBlessings.sort((a, b) => b.timestamp - a.timestamp);
+                
+                allBlessings = newBlessings; // Update global array
+                applyFilter(); // Render the data (applies filter if one is set)
 
-        <!-- ברכות טקסט וגלריה (עמודה ימנית/שמאלית במובייל) -->
-        <section class="lg:col-span-2 space-y-8">
-            <div id="loading-message" class="text-center p-8 bg-white rounded-xl shadow-lg border border-pink-200 text-xl font-semibold text-gray-500">
-                ...טוען ברכות מכל החברים
-            </div>
+            }, (error) => {
+                console.error("Error listening to blessings:", error);
+                loadingText.innerText = "שגיאה בטעינת הברכות.";
+            });
+        }
 
-            <!-- 1. ברכות טקסט -->
-            <div class="bg-gray-100 p-6 rounded-xl shadow-inner border border-gray-200">
-                <h3 class="text-2xl font-bold text-slate-700 mb-4 border-b border-slate-300 pb-2">המון מזל טוב! (ברכות בכתב)</h3>
-                <div id="blessings-container" class="max-h-[50vh] overflow-y-auto space-y-4 pr-3">
-                    <!-- ברכות טקסט יטענו כאן -->
-                </div>
-            </div>
+        async function saveBlessing(sender, text, imageBase64 = null, imageCaption = null, audioBase64 = null, audioMimeType = null) {
+            if (!isAuthReady || !db) {
+                console.error("Firebase not initialized or authenticated yet.");
+                return false;
+            }
 
-            <!-- 2. גלריית תמונות -->
-            <div class="bg-gray-100 p-6 rounded-xl shadow-inner border border-gray-200">
-                <h3 class="text-2xl font-bold text-slate-700 mb-4 border-b border-slate-300 pb-2">מזכרות ויזואליות</h3>
-                <div id="gallery-container" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    <!-- תמונות יטענו כאן -->
-                </div>
-            </div>
-        </section>
-    </main>
+            const blessingData = {
+                sender: sender,
+                text: text || "ברכה קולית בלבד", // Ensure text field is not empty if only audio exists
+                imageBase64: imageBase64,
+                imageCaption: imageCaption,
+                audioBase64: audioBase64,      // NEW
+                audioMimeType: audioMimeType,  // NEW
+                timestamp: serverTimestamp(),
+                userId: userId
+            };
 
-    <!-- הצבת אייקונים -->
-    <script>
-        lucide.createIcons();
+            try {
+                const docRef = await addDoc(collection(db, BLESSINGS_COLLECTION_PATH), blessingData);
+                console.log("Blessing saved with ID: ", docRef.id);
+                spawnBalloons(); // Visual effect on success
+                return true;
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                return false;
+            }
+        }
+        
+        // --- Audio Recording Functions (NEW) ---
+        async function startRecording() {
+            const startBtn = document.getElementById('start-recording-btn');
+            const stopBtn = document.getElementById('stop-recording-btn');
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                recordedAudioBase64 = null;
+                recordedAudioMimeType = null;
+                AUDIO_PREVIEW_ELEM.classList.add('hidden');
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    recordedAudioMimeType = mediaRecorder.mimeType;
+                    recordedAudioBase64 = await blobToBase64(audioBlob);
+                    
+                    AUDIO_PREVIEW_ELEM.src = URL.createObjectURL(audioBlob);
+                    AUDIO_PREVIEW_ELEM.classList.remove('hidden');
+
+                    // Stop media track to release microphone
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    RECORDING_STATUS_ELEM.innerText = 'הקלטה מוכנה לשליחה. (לחצו על "הוסף ברכה")';
+                    RECORDING_STATUS_ELEM.classList.remove('text-red-500');
+                    RECORDING_STATUS_ELEM.classList.add('text-green-600');
+                };
+
+                mediaRecorder.start();
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                RECORDING_STATUS_ELEM.innerText = 'מקליט... הקליקו על "עצור" לסיום.';
+                RECORDING_STATUS_ELEM.classList.remove('hidden', 'text-green-600');
+                RECORDING_STATUS_ELEM.classList.add('text-red-500');
+
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                RECORDING_STATUS_ELEM.innerText = 'שגיאה: לא ניתן לגשת למיקרופון.';
+                RECORDING_STATUS_ELEM.classList.remove('hidden');
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+        }
+
+        function stopRecording() {
+            const startBtn = document.getElementById('start-recording-btn');
+            const stopBtn = document.getElementById('stop-recording-btn');
+            
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+        }
+
+        function playRecordedAudio(base64, mimeType, button) {
+             const audio = new Audio(base64ToAudioUrl(base64, mimeType));
+             button.disabled = true;
+             audio.play();
+             audio.onended = () => button.disabled = false;
+             audio.onerror = () => {
+                console.error("Error playing audio.");
+                button.disabled = false;
+             };
+        }
+        
+        // --- Visual Effects (Balloons) (NEW) ---
+        function spawnBalloons() {
+            const container = document.getElementById('balloon-container');
+            const colors = ['#f472b6', '#3b82f6', '#10b981', '#f97316', '#a855f7'];
+            
+            for (let i = 0; i < 10; i++) {
+                const balloon = document.createElement('div');
+                balloon.classList.add('balloon');
+                balloon.style.left = `${Math.random() * 80 + 10}vw`; // Spawn in the middle 80%
+                balloon.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                balloon.style.animationDelay = `${Math.random() * 0.5}s`;
+                
+                container.appendChild(balloon);
+                
+                // Remove the element after the animation finishes
+                balloon.addEventListener('animationend', () => {
+                    balloon.remove();
+                });
+            }
+        }
+
+        // --- VIP Mode Functions (FIXED) ---
+        
+        function updateVIPMode(activate) {
+            const vipStats = document.getElementById('vip-stats');
+            const mainWrapper = document.getElementById('main-content-wrapper');
+            const toggleButton = document.getElementById('vip-mode-toggle');
+
+            isVipMode = activate;
+            
+            if (activate) {
+                vipStats.classList.remove('hidden');
+                mainWrapper.classList.add('vip-mode-active');
+                toggleButton.title = 'מצב אורח הכבוד מופעל - לחץ לכיבוי';
+                
+                // Manually refresh stats upon activation
+                document.getElementById('total-blessings-count').innerText = allBlessings.length;
+                document.getElementById('unique-senders-count').innerText = new Set(allBlessings.map(b => b.sender)).size;
+            } else {
+                vipStats.classList.add('hidden');
+                mainWrapper.classList.remove('vip-mode-active');
+                toggleButton.title = 'מצב אורח הכבוד';
+            }
+        }
+        
+        function showVIPModal() {
+            if (isVipMode) {
+                // If already active, toggle off immediately
+                updateVIPMode(false);
+                return;
+            }
+            
+            // Show modal
+            vipCodeInput.value = '';
+            vipFeedback.innerText = '';
+            vipModal.classList.remove('hidden');
+            vipCodeInput.focus();
+        }
+
+        function hideVIPModal() {
+            vipModal.classList.add('hidden');
+        }
+
+        function handleVIPSubmit() {
+            const code = vipCodeInput.value.trim();
+            vipFeedback.innerText = '';
+
+            if (code === VIP_SECRET_CODE) {
+                hideVIPModal();
+                updateVIPMode(true);
+            } else {
+                vipFeedback.innerText = 'קוד שגוי. הגישה נדחתה.';
+                vipCodeInput.value = '';
+                vipCodeInput.focus();
+            }
+        }
+        
+        // --- Other Gemini API Functions (Unchanged) ---
+        
+        // Generic function for calling gemini-2.5-flash-preview-09-2025
+        async function callGemini(prompt, useGrounding = false) { 
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`; 
+            
+            const payload = { 
+                contents: [prompt],
+                ...(useGrounding && { tools: [{ "google_search": {} }] }),
+                ...(prompt.systemInstruction && { systemInstruction: prompt.systemInstruction })
+            }; 
+            
+            let response;
+            
+            for (let i = 0; i < 3; i++) {
+                try {
+                    response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    if (response.ok || response.status !== 429) break; 
+                    const delay = Math.pow(2, i) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } catch(e) {
+                    console.error("Fetch attempt failed:", e);
+                    if (i === 2) throw new Error("שגיאה ברשת או ב-API.");
+                }
+            }
+            
+            if (!response || !response.ok) throw new Error(`API call failed: ${response?.status || 'Unknown error'}`); 
+            const result = await response.json();
+            
+            const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+            let source = null;
+            
+            const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
+            if (groundingMetadata && groundingMetadata.groundingAttributions?.length > 0) {
+                const attribution = groundingMetadata.groundingAttributions.find(a => a.web?.uri && a.web?.title);
+                if (attribution) {
+                    source = { uri: attribution.web.uri, title: attribution.web.title };
+                }
+            }
+            
+            return { text, source }; 
+        }
+
+        // TTS Function
+        async function speakText(elementId, button) { 
+            const textElement = document.getElementById(elementId); 
+            if (!textElement || !textElement.innerText.trim()) return; 
+            button.disabled = true; 
+            try { 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`; 
+                const payload = { contents: [{ parts: [{ text: `Say in a warm and happy tone in Hebrew: ${textElement.innerText}` }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } } }, model: "gemini-2.5-flash-preview-tts" }; 
+                
+                let response;
+                for (let i = 0; i < 3; i++) {
+                    try {
+                        response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (response.ok || response.status !== 429) break;
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } catch(e) {
+                        if (i === 2) throw new Error("שגיאה ברשת או ב-API.");
+                    }
+                }
+                
+                if (!response || !response.ok) throw new Error(`API Error: ${response?.status || 'Unknown error'}`); 
+                const result = await response.json(); 
+                const part = result?.candidates?.[0]?.content?.parts?.[0];
+                const audioData = part?.inlineData?.data; 
+                const mimeType = part?.inlineData?.mimeType; 
+
+                if (audioData && mimeType?.startsWith("audio/")) { 
+                    const sampleRate = parseInt(mimeType.match(/rate=(\d+)/)?.[1] || "24000", 10); 
+                    const pcm16 = new Int16Array(base64ToArrayBuffer(audioData)); 
+                    const audio = new Audio(URL.createObjectURL(pcmToWav(pcm16, sampleRate))); 
+                    audio.play(); 
+                    audio.onended = () => button.disabled = false; 
+                } else { 
+                    throw new Error("Invalid audio data."); 
+                } 
+            } catch (error) { 
+                console.error("Error with TTS:", error); 
+                button.disabled = false; 
+            } 
+        }
+
+        // Feature 1: Blessing Generation
+        async function generateBlessing() { 
+            const btn = document.getElementById('generate-blessing-btn'), spinner = document.getElementById('generate-spinner'), textArea = document.getElementById('blessing-text'); 
+            btn.disabled = true; 
+            spinner.classList.remove('hidden'); 
+            textArea.placeholder = "יוצר ברכה אישית...";
+            try { 
+                const prompt = {
+                    parts: [{ text: "כתוב ברכת יום הולדת קצרה, חמה ומעט מצחיקה בעברית, לאבא בשם ינאי שחוגג יום הולדת 44. הברכה צריכה להיות בסגנון לא רשמי." }]
+                }; 
+                const { text } = await callGemini(prompt); 
+                textArea.value = text ? text.trim().replace(/^"|"$/g, '') : "לא הצלחתי לחשוב על ברכה כרגע, נסו שוב."; 
+            } catch (error) { 
+                console.error("Error generating blessing:", error); 
+                textArea.value = "אופס, משהו השתבש ביצירת הברכה."; 
+            } finally { 
+                btn.disabled = false; 
+                spinner.classList.add('hidden'); 
+                textArea.placeholder = "הברכה שלכם...";
+            } 
+        }
+
+        // Feature 2: Image Captioning (VLM)
+        async function generateImageCaption() { 
+            const btn = document.getElementById('generate-caption-btn'), spinner = document.getElementById('caption-spinner'), captionInput = document.getElementById('image-caption'); 
+            const imageFile = document.getElementById('image-upload').files[0]; 
+            if (!imageFile) { 
+                alert("יש לבחור תמונה קודם."); return; 
+            } 
+            btn.disabled = true; 
+            spinner.classList.remove('hidden'); 
+            captionInput.placeholder = "יוצר תיאור תמונה יצירתי...";
+            try { 
+                const reader = new FileReader(); 
+                reader.onloadend = async () => { 
+                    const base64Data = reader.result.split(',')[1]; 
+                    const prompt = { 
+                        parts: [ 
+                            {text: "כתוב תיאור קצר, חם ויצירתי בעברית לתמונה זו, בסגנון של אלבום יום הולדת. התחל את התיאור בשם משפחה קליט."}, 
+                            { inlineData: { mimeType: imageFile.type, data: base64Data } } 
+                        ] 
+                    }; 
+                    const { text } = await callGemini(prompt); 
+                    captionInput.value = text ? text.trim().replace(/^"|"$/g, '') : "לא הצלחתי לתאר את התמונה."; 
+                    btn.disabled = false; 
+                    spinner.classList.add('hidden'); 
+                    captionInput.placeholder = "תיאור התמונה";
+                }; 
+                reader.readAsDataURL(imageFile); 
+            } catch (error) { 
+                console.error("Error generating caption:", error); 
+                captionInput.value = "אופס, משהו השתבש."; 
+                btn.disabled = false; 
+                spinner.classList.add('hidden'); 
+                captionInput.placeholder = "תיאור התמונה";
+            } 
+        }
+
+        // Feature 3: Poem Generation
+        async function generatePoem() { 
+            const btn = document.getElementById('generate-poem-btn'), spinner = document.getElementById('poem-spinner'); 
+            const keywords = document.getElementById('poem-keywords').value; 
+            const resultContainer = document.getElementById('poem-result-container'), poemTextElem = document.getElementById('poem-text'); 
+            if (!keywords.trim()) { 
+                alert("יש לכתוב כמה מילים כדי שאוכל ליצור שיר."); return; 
+            } 
+            btn.disabled = true; 
+            spinner.classList.remove('hidden'); 
+            resultContainer.classList.add('hidden');
+            poemTextElem.innerText = 'כותב שיר...';
+            try { 
+                const prompt = {
+                    parts: [{ text: `כתוב שיר יום הולדת קצר, מרגש ומחורז בעברית לגבר בשם ינאי החוגג 44. השתמש במילים וברעיונות הבאים כהשראה: "${keywords}".` }]
+                };
+                const { text } = await callGemini(prompt); 
+                if (text) { 
+                    poemTextElem.innerText = text.trim(); 
+                    resultContainer.classList.remove('hidden'); 
+                } else { 
+                    poemTextElem.innerText = 'לא הצלחתי לכתוב שיר, נסו מילים אחרות.'; 
+                } 
+            } catch (error) { 
+                console.error("Error generating poem:", error); 
+                poemTextElem.innerText = 'אופס, משהו השתבש.'; 
+            } finally { 
+                btn.disabled = false; 
+                spinner.classList.add('hidden'); 
+            } 
+        }
+
+        // Feature 4: Dream Image Generation
+        async function generateDreamImage() { 
+            const btn = document.getElementById('generate-dream-btn'), spinner = document.getElementById('dream-spinner'), promptInput = document.getElementById('dream-prompt'), imageContainer = document.getElementById('dream-image-container'); 
+            const userPrompt = promptInput.value; 
+            if (!userPrompt.trim()) { 
+                alert("צריך לכתוב תיאור כדי ליצור תמונה!"); return; 
+            } 
+            btn.disabled = true; 
+            spinner.classList.remove('hidden'); 
+            imageContainer.innerHTML = '<p class="text-indigo-600 flex items-center justify-center gap-2"><span class="spinner"></span> יוצר את החלום... זה עשוי לקחת רגע...</p>'; 
+            try { 
+                const fullPrompt = `A funny, surreal, high-quality, vibrant painting of: ${userPrompt}. Style: whimsical and artistic. photorealistic.`; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`; 
+                const payload = { instances: [{ prompt: fullPrompt }], parameters: { "sampleCount": 1 } }; 
+                
+                let response;
+                for (let i = 0; i < 3; i++) {
+                    try {
+                        response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); 
+                        if (response.ok || response.status !== 429) break;
+                        const delay = Math.pow(2, i) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } catch(e) {
+                        if (i === 2) throw new Error("שגיאה ברשת או ב-API.");
+                    }
+                }
+                
+                if (!response || !response.ok) throw new Error(`API call failed with status: ${response?.status || 'Unknown error'}`); 
+                const result = await response.json(); 
+                const base64Data = result.predictions?.[0]?.bytesBase64Encoded; 
+                if (base64Data) { 
+                    imageContainer.innerHTML = ''; 
+                    const img = document.createElement('img'); 
+                    img.src = `data:image/png;base64,${base64Data}`; 
+                    img.alt = `AI generated image: ${userPrompt}`; 
+                    img.className = 'rounded-lg shadow-lg mx-auto w-full max-w-sm'; 
+                    imageContainer.appendChild(img); 
+                } else { 
+                    imageContainer.innerHTML = '<p class="text-red-500">לא הצלחתי ליצור תמונה. אולי ננסח את החלום אחרת?</p>'; 
+                } 
+            } catch (error) { 
+                console.error("Error generating dream image:", error); 
+                imageContainer.innerHTML = '<p class="text-red-500">אופס, משהו השתבש במכונת החלומות. נסו שוב מאוחר יותר.</p>'; 
+            } finally { 
+                btn.disabled = false; 
+                spinner.classList.add('hidden'); 
+            } 
+        }
+        
+        // Feature 5: Trivia (Grounding)
+        async function generateTrivia() {
+            const btn = document.getElementById('generate-trivia-btn'), spinner = document.getElementById('trivia-spinner');
+            const resultContainer = document.getElementById('trivia-result-container'), triviaTextElem = document.getElementById('trivia-text'), sourceElem = document.getElementById('trivia-source');
+            
+            btn.disabled = true;
+            spinner.classList.remove('hidden');
+            resultContainer.classList.add('hidden');
+            triviaTextElem.innerText = 'מחפש עובדה מדהימה על שנת 1981 או המספר 44...';
+            sourceElem.innerText = '';
+            
+            try {
+                const prompt = {
+                    parts: [{ text: "Find one surprising, positive, or interesting historical fact, event, or trivia related to the year 1981 (his birth year) or the number 44. The response must be one short paragraph in Hebrew and must be grounded in Google Search." }]
+                };
+                
+                const { text, source } = await callGemini(prompt, true);
+                
+                if (text) {
+                    triviaTextElem.innerText = text.trim();
+                    if (source) {
+                        sourceElem.innerHTML = `מקור: <a href="${source.uri}" target="_blank" class="text-blue-500 hover:underline">${source.title}</a>`;
+                    } else {
+                        sourceElem.innerText = "המקור לא נמצא.";
+                    }
+                    resultContainer.classList.remove('hidden');
+                } else {
+                    triviaTextElem.innerText = 'לא הצלחתי למצוא עובדת טריוויה כרגע.';
+                }
+            } catch (error) {
+                console.error("Error generating trivia:", error);
+                triviaTextElem.innerText = 'אופס, משהו השתבש בחיפוש הטריוויה.';
+            } finally {
+                btn.disabled = false;
+                spinner.classList.add('hidden');
+            }
+        }
+
+        // Feature 6: Future Prediction
+        async function generateFuturePrediction() {
+            const btn = document.getElementById('generate-future-btn'), spinner = document.getElementById('future-spinner');
+            const resultContainer = document.getElementById('future-result-container'), futureTextElem = document.getElementById('future-text');
+            
+            btn.disabled = true;
+            spinner.classList.remove('hidden');
+            resultContainer.classList.add('hidden');
+            futureTextElem.innerText = 'מחשב מסלול בזמן...';
+            
+            try {
+                const systemPrompt = "Act as a warm, imaginative, and optimistic narrator. Your response must be a short, positive, and engaging paragraph in Hebrew.";
+                const userQuery = "Write a fun prediction for Yanai (who is turning 44 and loves fishing, LEGO, and making people laugh) for his 60th birthday. Focus on family, travel, and hobbies.";
+                
+                const prompt = {
+                    parts: [{ text: userQuery }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] }
+                };
+                
+                const { text } = await callGemini(prompt, false); 
+                
+                if (text) {
+                    futureTextElem.innerText = text.trim();
+                    resultContainer.classList.remove('hidden');
+                } else {
+                    futureTextElem.innerText = 'לא הצלחתי לחזות את העתיד כרגע.';
+                }
+            } catch (error) {
+                console.error("Error generating future prediction:", error);
+                futureTextElem.innerText = 'אופס, משהו השתבש במכונת הזמן.';
+            } finally {
+                btn.disabled = false;
+                spinner.classList.add('hidden');
+            }
+        }
+
+
+        // --- Event Listeners and Page Logic ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Confetti animation setup
+            const container = document.getElementById('confetti-container');
+            const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6'];
+            for (let i = 0; i < 100; i++) { 
+                const confetti = document.createElement('div'); 
+                confetti.classList.add('confetti'); 
+                confetti.style.left = `${Math.random() * 100}vw`; 
+                confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)]; 
+                confetti.style.animationDelay = `${Math.random() * 5}s`; 
+                const size = Math.random() * 5 + 5; 
+                confetti.style.width = `${size}px`; 
+                confetti.style.height = `${size}px`; 
+                container.appendChild(confetti); 
+            }
+
+            // Button listeners
+            document.getElementById('generate-blessing-btn').addEventListener('click', generateBlessing);
+            document.getElementById('speak-main-blessing').addEventListener('click', (e) => speakText('main-blessing-text', e.currentTarget));
+            document.getElementById('generate-caption-btn').addEventListener('click', generateImageCaption);
+            document.getElementById('generate-poem-btn').addEventListener('click', generatePoem);
+            document.getElementById('speak-poem').addEventListener('click', (e) => speakText('poem-text', e.currentTarget));
+            document.getElementById('generate-dream-btn').addEventListener('click', generateDreamImage);
+            document.getElementById('generate-trivia-btn').addEventListener('click', generateTrivia);
+            document.getElementById('generate-future-btn').addEventListener('click', generateFuturePrediction);
+            document.getElementById('speak-future-btn').addEventListener('click', (e) => speakText('future-text', e.currentTarget));
+            
+            // NEW: Audio Recording Listeners
+            document.getElementById('start-recording-btn').addEventListener('click', startRecording);
+            document.getElementById('stop-recording-btn').addEventListener('click', stopRecording);
+            
+            // NEW: Filter Listener
+            document.getElementById('blessing-filter-input').addEventListener('input', applyFilter);
+
+            // FIXED: VIP Mode Listeners using the new Modal
+            document.getElementById('vip-mode-toggle').addEventListener('click', showVIPModal);
+            document.getElementById('vip-submit-btn').addEventListener('click', handleVIPSubmit);
+            document.getElementById('vip-cancel-btn').addEventListener('click', hideVIPModal);
+            vipCodeInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    handleVIPSubmit();
+                }
+            });
+
+
+            // Image upload preview logic
+            document.getElementById('image-upload').addEventListener('change', (event) => { 
+                const container = document.getElementById('image-preview-container'); 
+                const preview = document.getElementById('image-preview'); 
+                const file = event.target.files[0]; 
+                if (file) { 
+                    preview.src = URL.createObjectURL(file); 
+                    container.classList.remove('hidden'); 
+                } else { 
+                    container.classList.add('hidden'); 
+                } 
+            });
+
+            // Form submission logic (Save to Firestore)
+            document.getElementById('blessing-form').addEventListener('submit', async function(event) {
+                event.preventDefault();
+                const btn = this.querySelector('button[type="submit"]');
+                const successMsg = document.getElementById('success-message');
+                const errorMsg = document.getElementById('error-message');
+
+                btn.disabled = true;
+                successMsg.classList.add('hidden');
+                errorMsg.classList.add('hidden');
+
+                const senderName = document.getElementById('sender-name').value;
+                const blessingText = document.getElementById('blessing-text').value;
+                const imageFile = document.getElementById('image-upload').files[0];
+                const imageCaption = document.getElementById('image-caption').value;
+                let imageBase64 = null;
+                
+                // Validate either text or audio exists
+                if (!senderName || (!blessingText && !recordedAudioBase64)) {
+                    // Replaced alert with console error/UI message for better Canvas compatibility
+                    errorMsg.innerText = "יש למלא שם וגם ברכה כתובה או קולית.";
+                    errorMsg.classList.remove('hidden');
+                    btn.disabled = false;
+                    return;
+                }
+                
+                // Convert image to Base64 if a file is present
+                if (imageFile) {
+                    const reader = new FileReader();
+                    
+                    const readImage = new Promise((resolve) => {
+                        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                        reader.readAsDataURL(imageFile);
+                    });
+                    
+                    try {
+                        imageBase64 = await readImage;
+                    } catch (e) {
+                        console.error("Error reading image file:", e);
+                        errorMsg.innerText = "שגיאה בקריאת קובץ התמונה.";
+                        errorMsg.classList.remove('hidden');
+                        btn.disabled = false;
+                        return;
+                    }
+                }
+                
+                // Save data to Firestore (passing new audio variables)
+                const success = await saveBlessing(senderName, blessingText, imageBase64, imageCaption, recordedAudioBase64, recordedAudioMimeType);
+
+                if (success) {
+                    successMsg.classList.remove('hidden');
+                    setTimeout(() => { successMsg.classList.add('hidden'); }, 3000); 
+                    this.reset(); 
+                    document.getElementById('image-preview-container').classList.add('hidden');
+                    // Reset audio state after successful submission
+                    recordedAudioBase64 = null;
+                    recordedAudioMimeType = null;
+                    AUDIO_PREVIEW_ELEM.classList.add('hidden');
+                    RECORDING_STATUS_ELEM.classList.add('hidden');
+                } else {
+                    errorMsg.classList.remove('hidden');
+                }
+
+                btn.disabled = false;
+            });
+        });
     </script>
+
 </body>
 </html>
