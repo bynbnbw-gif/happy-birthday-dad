@@ -336,7 +336,15 @@
         setLogLevel('debug'); // Enable Firestore logging
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'happy-birthday-yanai';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const firebaseConfig = {
+  apiKey: "AIzaSyD2rJZ7aJWvdgT62fCNcwDDV1_CxjZzFm4",
+  authDomain: "happy-birthday-dad-73e45.firebaseapp.com",
+  projectId: "happy-birthday-dad-73e45",
+  storageBucket: "happy-birthday-dad-73e45.firebasestorage.app",
+  messagingSenderId: "316843981873",
+  appId: "1:316843981873:web:8f065592701b48df556910",
+  measurementId: "G-BEF95RCPN3"
+};
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         let db, auth, userId = null;
