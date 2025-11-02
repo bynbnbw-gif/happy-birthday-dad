@@ -898,16 +898,53 @@ async function submitGreeting(event) {
         const toneResponse = await classifyTone(text);
 
         // Step 4: Save greeting to Firestore (shared collection)
-        const db = window.getFirestore();
-        const greetingsRef = window.collection(db, "greetings");
+        // --- FIREBASE REFERENCES ---
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const storage = getStorage(app);
 
-        await window.addDoc(greetingsRef, {
+// --- SUBMISSION LOGIC ---
+async function submitGreeting(event) {
+    event.preventDefault();
+    setButtonLoading('submit-greeting', true, 'שלח את הברכה המיוחדת');
+
+    const name = document.getElementById('greeter-name').value;
+    const text = document.getElementById('greeting-text').value;
+    const fileInput = document.getElementById('greeting-files');
+    const files = fileInput.files;
+
+    try {
+        // Step 1: Upload files
+        const fileUrls = [];
+        for (const file of files) {
+            const fileExtension = file.name.split('.').pop();
+            const fileName = `${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
+            const fileRef = storageRef(storage, `greetings/${fileName}`);
+            await uploadBytes(fileRef, file);
+            fileUrls.push(await getDownloadURL(fileRef));
+        }
+
+        // Step 2: Upload audio
+        let audioUrl = null;
+        if (recordedBlob) {
+            const audioName = `${Date.now()}-${crypto.randomUUID()}.webm`;
+            const audioRef = storageRef(storage, `greetings/${audioName}`);
+            await uploadBytes(audioRef, recordedBlob);
+            audioUrl = await getDownloadURL(audioRef);
+        }
+
+        // Step 3: Classify tone using LLM
+        const toneResponse = await classifyTone(text);
+
+        // Step 4: Save greeting to Firestore (shared collection)
+        const greetingsRef = collection(db, "greetings");
+        await addDoc(greetingsRef, {
             greeterName: name || "אנונימי",
             text,
             files: fileUrls,
             audioUrl,
             userId: window.userId || null,
-            timestamp: window.serverTimestamp(),
+            timestamp: serverTimestamp(),
             likes: [],
             likesCount: 0,
             tone: toneResponse.tone || 'כללי',
@@ -922,6 +959,7 @@ async function submitGreeting(event) {
         updateFileCount();
 
         showModal('הברכה נשלחה בהצלחה!', 'תודה ששיתפת את הברכה המרגשת שלך 💖', 'green');
+
     } catch (e) {
         console.error("❌ שגיאה בשליחת ברכה:", e);
         showModal('שגיאה בשליחה', `הברכה לא נשלחה: ${e.message}`, 'error');
@@ -934,11 +972,10 @@ window.submitGreeting = submitGreeting;
 // --- DISPLAY GREETINGS IN REAL TIME ---
 (function listenToGreetings() {
     try {
-        const db = window.getFirestore();
-        const greetingsRef = window.collection(db, "greetings");
-        const q = window.query(greetingsRef, window.orderBy("timestamp", "desc"));
+        const greetingsRef = collection(db, "greetings");
+        const q = query(greetingsRef, orderBy("timestamp", "desc"));
 
-        window.onSnapshot(q, (snapshot) => {
+        onSnapshot(q, (snapshot) => {
             const container = document.getElementById('greetings-feed');
             container.innerHTML = '';
 
