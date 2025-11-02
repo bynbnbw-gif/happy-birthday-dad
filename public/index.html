@@ -121,38 +121,43 @@ const firebaseConfig = {
             }
         };
 
-        // Function to get the correct collection path (Now pointing to the PUBLIC space)
-        window.getGreetingsCollectionRef = () => {
-            // Store data in the PUBLIC space for shared access by all users
-            return collection(db, `artifacts/${appId}/public/data/yanai_greetings`);
-        };
-        
-        // Function to get the storage path
-        window.getStoragePath = (fileId) => {
-            // Keep storage private per user for uploads, but accessible via URL
-            return `const PUBLIC_GREETING_PATH = `artifacts/${appId}/public/data/greetings`;
-`;
-        };
-        
-        // --- DATA LOADING (GREETINGS) ---
-        window.loadGreetings = () => {
-            if (!isAuthReady || !db) return;
+       // Function to get the correct collection path (Now pointing to the PUBLIC space)
+window.getGreetingsCollectionRef = () => {
+    // Store data in the PUBLIC space for shared access by all users
+    // Using 'yanai_greetings' as the collection name
+    return collection(db, `artifacts/${appId}/public/data/yanai_greetings`);
+};
 
-            // Using simple query for real-time listener (data will be sorted/filtered in JS)
-            const q = query(window.getGreetingsCollectionRef(), orderBy("timestamp", "desc"));
-            
-            onSnapshot(q, (querySnapshot) => {
-                const greetings = [];
-                querySnapshot.forEach((document) => {
-                    greetings.push({ id: document.id, ...document.data() });
-                });
-                window.allGreetings = greetings; // Save raw data
-                window.sortAndRender(); // Sort and render based on current criteria
-            }, (error) => {
-                console.error("Error listening to greetings:", error);
-                document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות: ${error.message}</p>`;
-            });
-        };
+// Function to get the storage path (FIXED)
+window.getStoragePath = (fileId) => {
+    // Keep storage private per user for uploads (standard user path)
+    // The previous implementation mistakenly returned a const declaration string.
+    return `artifacts/${appId}/users/${userId}/uploads/${fileId}`;
+};
+
+// --- DATA LOADING (GREETINGS) ---
+window.loadGreetings = () => {
+    if (!isAuthReady || !db) return;
+
+    // Using a simple query for a real-time listener.
+    // **Removed orderBy** to avoid potential Firestore indexing issues and rely on client-side sortAndRender().
+    const q = query(window.getGreetingsCollectionRef());
+    
+    onSnapshot(q, (querySnapshot) => {
+        const greetings = [];
+        querySnapshot.forEach((document) => {
+            // Get the document ID and all its data
+            greetings.push({ id: document.id, ...document.data() });
+        });
+        window.allGreetings = greetings; // Save raw data
+        window.sortAndRender(); // Sort and render based on current criteria
+    }, (error) => {
+        console.error("Error listening to greetings:", error);
+        // Display user-friendly error message
+        document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות: ${error.message}</p>`;
+    });
+};
+
 
         // Call initialization on window load
         window.onload = window.initializeFirebase;
