@@ -130,7 +130,8 @@ const firebaseConfig = {
         // Function to get the storage path
         window.getStoragePath = (fileId) => {
             // Keep storage private per user for uploads, but accessible via URL
-            return `artifacts/${appId}/users/${userId}/yanai_uploads/${fileId}`;
+            return `const PUBLIC_GREETING_PATH = `artifacts/${appId}/public/data/greetings`;
+`;
         };
         
         // --- DATA LOADING (GREETINGS) ---
