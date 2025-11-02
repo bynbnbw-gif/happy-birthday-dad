@@ -121,42 +121,48 @@ const firebaseConfig = {
             }
         };
 
-       // Function to get the correct collection path (Now pointing to the PUBLIC space)
+    // Function to get the correct collection path (Now pointing to the PUBLIC space for shared greetings)
 window.getGreetingsCollectionRef = () => {
-    // Store data in the PUBLIC space for shared access by all users
-    // Using 'yanai_greetings' as the collection name
+    // הנתונים מאוחסנים בנתיב הציבורי (/public/data/) כדי להיות משותפים לכל המשתמשים
     return collection(db, `artifacts/${appId}/public/data/yanai_greetings`);
 };
 
-// Function to get the storage path (FIXED)
+// Function to get the storage path for file uploads (FIXED to return a proper path)
 window.getStoragePath = (fileId) => {
-    // Keep storage private per user for uploads (standard user path)
-    // The previous implementation mistakenly returned a const declaration string.
+    // נתיב אחסון פרטי סטנדרטי למשתמש עבור קבצים מועלים
+    // Note: 'userId' must be defined after authentication is complete.
     return `artifacts/${appId}/users/${userId}/uploads/${fileId}`;
 };
 
 // --- DATA LOADING (GREETINGS) ---
 window.loadGreetings = () => {
+    // ודא שהאפליקציה מוכנה לשימוש ב-Firestore
     if (!isAuthReady || !db) return;
 
-    // Using a simple query for a real-time listener.
-    // **Removed orderBy** to avoid potential Firestore indexing issues and rely on client-side sortAndRender().
+    // יוצר שאילתת Firestore פשוטה
+    // **הסרנו את orderBy** כדי למנוע שגיאות אינדקסים ולהסתמך על מיון ב-JavaScript
     const q = query(window.getGreetingsCollectionRef());
     
-    onSnapshot(q, (querySnapshot) => {
+    // מאזין בזמן אמת (onSnapshot) לכל שינוי בקולקציה הציבורית
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
         const greetings = [];
         querySnapshot.forEach((document) => {
-            // Get the document ID and all its data
+            // הוספת הברכה עם ה-ID שלה לרשימה
             greetings.push({ id: document.id, ...document.data() });
         });
-        window.allGreetings = greetings; // Save raw data
-        window.sortAndRender(); // Sort and render based on current criteria
+        window.allGreetings = greetings; // שמירת הנתונים הגולמיים
+        window.sortAndRender(); // מיון והצגת הנתונים באמצעות פונקציה חיצונית (בדרך כלל ממיין לפי timestamp)
+        
+        // החזרת פונקציית unsubscribe כך שניתן יהיה לעצור את ההאזנה אם צריך
+        return unsubscribe;
+
     }, (error) => {
         console.error("Error listening to greetings:", error);
-        // Display user-friendly error message
-        document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות: ${error.message}</p>`;
+        // הצגת הודעת שגיאה ידידותית למשתמש
+        document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות המשותפות: ${error.message}</p>`;
     });
 };
+
 
 
         // Call initialization on window load
