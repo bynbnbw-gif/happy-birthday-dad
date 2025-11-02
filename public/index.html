@@ -118,14 +118,15 @@
             }
         };
 
-        // Function to get the correct collection path (private for this app's greetings)
+        // Function to get the correct collection path (Now pointing to the PUBLIC space)
         window.getGreetingsCollectionRef = () => {
-            // Store data under the user's private space
-            return collection(db, `artifacts/${appId}/users/${userId}/yanai_greetings`);
+            // Store data in the PUBLIC space for shared access by all users
+            return collection(db, `artifacts/${appId}/public/data/yanai_greetings`);
         };
         
         // Function to get the storage path
         window.getStoragePath = (fileId) => {
+            // Keep storage private per user for uploads, but accessible via URL
             return `artifacts/${appId}/users/${userId}/yanai_uploads/${fileId}`;
         };
         
@@ -1267,4 +1268,3 @@
 
     </script>
 </body>
-</html>
