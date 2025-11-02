@@ -805,111 +805,163 @@
 
         // --- SUBMISSION LOGIC ---
 
-        async function uploadFile(file) {
-            const fileExtension = file.name.split('.').pop();
-            const fileName = `${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
-            const fileRef = window.storageRef(window.getStorage(), window.getStoragePath(fileName));
-            
-            await window.uploadBytes(fileRef, file);
-            return await window.getDownloadURL(fileRef);
-        }
+       // --- SUBMISSION LOGIC ---
 
-        async function uploadAudio() {
-            if (!recordedBlob) return null;
-            const fileName = `${Date.now()}-${crypto.randomUUID()}.webm`; // Assuming webm/audio/ogg
-            const fileRef = window.storageRef(window.getStorage(), window.getStoragePath(fileName));
-            
-            await window.uploadBytes(fileRef, recordedBlob);
-            return await window.getDownloadURL(fileRef);
-        }
-        
-        async function classifyTone(text) {
-            const systemPrompt = "אתה מנתח טקסט עברי שכותב את הטון הרגשי של הודעה קצרה (עד 3 מילים) ואז מסכם את תמצית המסר במשפט אחד. החזר תגובת JSON בלבד. הטונים האפשריים: 'אהבה', 'הומור', 'התרגשות', 'געגוע', 'הערכה'.";
-            const userQuery = `נתח את הטקסט הבא: "${text}"`;
-            
-            const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-                generationConfig: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: "OBJECT",
-                        properties: {
-                            "tone": { "type": "STRING", "description": "הטון הרגשי הראשי" },
-                            "summary": { "type": "STRING", "description": "סיכום המסר במשפט אחד" }
-                        },
-                        "propertyOrdering": ["tone", "summary"]
-                    }
-                }
-            };
-            
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
-            const result = await fetchAI(apiUrl, payload);
-            
-            try {
-                const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-                return JSON.parse(jsonText);
-            } catch (e) {
-                console.error("AI response parsing failed, defaulting tone.", e);
-                return { tone: 'כללי', summary: 'ברכה מרגשת' };
+async function uploadFile(file) {
+    try {
+        const fileExtension = file.name.split('.').pop();
+        const fileName = `${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
+        const storage = window.getStorage();
+        const fileRef = window.storageRef(storage, window.getStoragePath(fileName));
+
+        await window.uploadBytes(fileRef, file);
+        return await window.getDownloadURL(fileRef);
+    } catch (e) {
+        console.error("❌ שגיאה בהעלאת קובץ:", e);
+        throw new Error("העלאת הקובץ נכשלה");
+    }
+}
+
+async function uploadAudio() {
+    if (!recordedBlob) return null;
+    try {
+        const fileName = `${Date.now()}-${crypto.randomUUID()}.webm`;
+        const storage = window.getStorage();
+        const fileRef = window.storageRef(storage, window.getStoragePath(fileName));
+
+        await window.uploadBytes(fileRef, recordedBlob);
+        return await window.getDownloadURL(fileRef);
+    } catch (e) {
+        console.error("❌ שגיאה בהעלאת אודיו:", e);
+        throw new Error("העלאת האודיו נכשלה");
+    }
+}
+
+async function classifyTone(text) {
+    const systemPrompt = "אתה מנתח טקסט עברי שכותב את הטון הרגשי של הודעה קצרה (עד 3 מילים) ואז מסכם את תמצית המסר במשפט אחד. החזר תגובת JSON בלבד. הטונים האפשריים: 'אהבה', 'הומור', 'התרגשות', 'געגוע', 'הערכה'.";
+    const userQuery = `נתח את הטקסט הבא: "${text}"`;
+
+    const payload = {
+        contents: [{ parts: [{ text: userQuery }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: "OBJECT",
+                properties: {
+                    "tone": { "type": "STRING", "description": "הטון הרגשי הראשי" },
+                    "summary": { "type": "STRING", "description": "סיכום המסר במשפט אחד" }
+                },
+                "propertyOrdering": ["tone", "summary"]
             }
         }
-        
-        async function submitGreeting(event) {
-            event.preventDefault();
-            setButtonLoading('submit-greeting', true, 'שלח את הברכה המיוחדת');
+    };
 
-            const name = document.getElementById('greeter-name').value;
-            const text = document.getElementById('greeting-text').value;
-            const fileInput = document.getElementById('greeting-files');
-            const files = fileInput.files;
+    try {
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
+        const result = await fetchAI(apiUrl, payload);
+        const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        return JSON.parse(jsonText);
+    } catch (e) {
+        console.error("AI response parsing failed, using default tone.", e);
+        return { tone: 'כללי', summary: 'ברכה מרגשת' };
+    }
+}
 
-            try {
-                // Step 1: Upload files
-                const fileUrls = [];
-                for (const file of files) {
-                    fileUrls.push(await uploadFile(file));
-                }
-                
-                // Step 2: Upload audio
-                const audioUrl = recordedBlob ? (await uploadAudio()) : null;
-                
-                // Step 3: Call LLM for sentiment/tone
-                const toneResponse = await classifyTone(text);
+async function submitGreeting(event) {
+    event.preventDefault();
+    setButtonLoading('submit-greeting', true, 'שלח את הברכה המיוחדת');
 
-                // Step 4: Add document to the **PUBLIC** collection
-                await window.addDoc(window.getGreetingsCollectionRef(), {
-                    greeterName: name,
-                    text: text,
-                    files: fileUrls,
-                    audioUrl: audioUrl,
-                    userId: window.userId,
-                    timestamp: window.serverTimestamp(),
-                    likes: [], // Store UIDs of users who liked
-                    likesCount: 0,
-                    tone: toneResponse.tone || 'כללי', // Store classification result
-                    summary: toneResponse.summary || '', // Store summary (if any)
-                });
+    const name = document.getElementById('greeter-name').value.trim();
+    const text = document.getElementById('greeting-text').value.trim();
+    const fileInput = document.getElementById('greeting-files');
+    const files = fileInput.files;
 
-                // Step 5: Success feedback and cleanup
-                document.getElementById('greeting-form').reset();
-                
-                // Reset file and audio states
-                fileInput.value = '';
-                recordedBlob = null;
-                document.getElementById('audio-preview').classList.add('hidden');
-                
-                updateFileCount();
-                showModal('הברכה נשלחה בהצלחה!', 'תודה ששיתפת את הברכה המרגשת שלך! ינאי בטוח יאהב אותה.', 'green');
+    if (!text) {
+        showModal('שגיאה', 'אנא כתוב ברכה לפני השליחה.', 'error');
+        setButtonLoading('submit-greeting', false, 'שלח את הברכה המיוחדת');
+        return;
+    }
 
-            } catch (e) {
-                console.error("Error adding document or uploading data: ", e);
-                showModal('שגיאה בשליחה', `הברכה לא נשלחה: ${e.message}`, 'error');
-            } finally {
-                setButtonLoading('submit-greeting', false, 'שלח את הברכה המיוחדת');
-            }
+    try {
+        // Step 1: Upload files
+        const fileUrls = [];
+        for (const file of files) {
+            const url = await uploadFile(file);
+            fileUrls.push(url);
         }
-        window.submitGreeting = submitGreeting;
+
+        // Step 2: Upload audio if exists
+        const audioUrl = recordedBlob ? (await uploadAudio()) : null;
+
+        // Step 3: Classify tone
+        const toneResponse = await classifyTone(text);
+
+        // Step 4: Save greeting to Firestore (shared collection)
+        const db = window.getFirestore();
+        const greetingsRef = window.collection(db, "greetings");
+
+        await window.addDoc(greetingsRef, {
+            greeterName: name || "אנונימי",
+            text,
+            files: fileUrls,
+            audioUrl,
+            userId: window.userId || null,
+            timestamp: window.serverTimestamp(),
+            likes: [],
+            likesCount: 0,
+            tone: toneResponse.tone || 'כללי',
+            summary: toneResponse.summary || ''
+        });
+
+        // Step 5: Reset and feedback
+        document.getElementById('greeting-form').reset();
+        fileInput.value = '';
+        recordedBlob = null;
+        document.getElementById('audio-preview').classList.add('hidden');
+        updateFileCount();
+
+        showModal('הברכה נשלחה בהצלחה!', 'תודה ששיתפת את הברכה המרגשת שלך 💖', 'green');
+    } catch (e) {
+        console.error("❌ שגיאה בשליחת ברכה:", e);
+        showModal('שגיאה בשליחה', `הברכה לא נשלחה: ${e.message}`, 'error');
+    } finally {
+        setButtonLoading('submit-greeting', false, 'שלח את הברכה המיוחדת');
+    }
+}
+window.submitGreeting = submitGreeting;
+
+// --- DISPLAY GREETINGS IN REAL TIME ---
+(function listenToGreetings() {
+    try {
+        const db = window.getFirestore();
+        const greetingsRef = window.collection(db, "greetings");
+        const q = window.query(greetingsRef, window.orderBy("timestamp", "desc"));
+
+        window.onSnapshot(q, (snapshot) => {
+            const container = document.getElementById('greetings-feed');
+            container.innerHTML = '';
+
+            snapshot.forEach((doc) => {
+                const data = doc.data();
+                const card = document.createElement('div');
+                card.className = 'greeting-card';
+                card.innerHTML = `
+                    <h3>${data.greeterName || 'אנונימי'}</h3>
+                    <p>${data.text}</p>
+                    ${data.files?.length ? `<div>${data.files.map(f => `<a href="${f}" target="_blank">📎 קובץ</a>`).join(' ')}</div>` : ''}
+                    ${data.audioUrl ? `<audio controls src="${data.audioUrl}"></audio>` : ''}
+                    <small>${data.tone ? `🎭 טון: ${data.tone}` : ''}</small>
+                    <hr>
+                `;
+                container.appendChild(card);
+            });
+        });
+    } catch (err) {
+        console.error("❌ שגיאה בהאזנה לברכות:", err);
+    }
+})();
+
 
         // --- AI FEATURES STUBS (Need implementation for full functionality) ---
         
