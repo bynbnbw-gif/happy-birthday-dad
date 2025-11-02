@@ -28,17 +28,33 @@
         body {
             font-family: 'Inter', sans-serif;
         }
+        /* Custom scrollbar for better look */
+        .custom-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background-color: #fca5a5;
+            border-radius: 3px;
+        }
+        .custom-scroll {
+            scrollbar-color: #fca5a5 #fef2f2;
+            scrollbar-width: thin;
+        }
     </style>
     
     <!-- Firebase Imports -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, onSnapshot, collection, query, orderBy, limit, addDoc, updateDoc, serverTimestamp, arrayUnion } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, collection, query, orderBy, limit, addDoc, updateDoc, serverTimestamp, arrayUnion, setLogLevel, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
         
+        // setLogLevel('debug'); // Enable for debugging Firestore/Auth issues
+
         // --- GLOBAL FIREBASE VARIABLES & SETUP ---
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = {
+        // Use global config if available, otherwise use mock config
+       const firebaseConfig = {
   apiKey: "AIzaSyD2rJZ7aJWvdgT62fCNcwDDV1_CxjZzFm4",
   authDomain: "happy-birthday-dad-73e45.firebaseapp.com",
   projectId: "happy-birthday-dad-73e45",
@@ -49,7 +65,7 @@
 };
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        let app, db, auth;
+        let app, db, auth, storage;
         let userId = 'loading';
         let isAuthReady = false;
 
@@ -59,14 +75,22 @@
         // Functions exposed to the global scope
         window.initializeFirebase = async () => {
             try {
-                if (Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase config is missing. Cannot initialize Firestore.");
+                if (!firebaseConfig.apiKey || firebaseConfig.apiKey === 'MOCK_API_KEY') {
+                    console.error("Firebase config is missing or mocked. Cannot initialize Firestore/Storage fully.");
+                    document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה: הגדרות Firebase חסרות. אנא פנה למנהל האתר.</p>`;
                     return;
                 }
+                
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
+                storage = getStorage(app);
                 window.db = db; // Expose for other functions
+                window.storage = storage; // Expose storage
+
+                // Set session persistence (optional but good for maintaining auth state)
+                await setPersistence(auth, browserSessionPersistence);
+
 
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
@@ -76,7 +100,9 @@
                         // Sign in with custom token if available, otherwise anonymously
                         if (initialAuthToken) {
                             await signInWithCustomToken(auth, initialAuthToken);
+                            userId = auth.currentUser.uid;
                         } else {
+                            // If no token, sign in anonymously (if allowed by rules)
                             await signInAnonymously(auth);
                             userId = auth.currentUser.uid;
                         }
@@ -88,12 +114,19 @@
                 });
             } catch (error) {
                 console.error("Firebase initialization or authentication failed:", error);
+                document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה קריטית באתחול: ${error.message}</p>`;
             }
         };
 
         // Function to get the correct collection path (private for this app's greetings)
         window.getGreetingsCollectionRef = () => {
+            // Store data under the user's private space
             return collection(db, `artifacts/${appId}/users/${userId}/yanai_greetings`);
+        };
+        
+        // Function to get the storage path
+        window.getStoragePath = (fileId) => {
+            return `artifacts/${appId}/users/${userId}/yanai_uploads/${fileId}`;
         };
         
         // --- DATA LOADING (GREETINGS) ---
@@ -105,25 +138,31 @@
             
             onSnapshot(q, (querySnapshot) => {
                 const greetings = [];
-                querySnapshot.forEach((doc) => {
-                    greetings.push({ id: doc.id, ...doc.data() });
+                querySnapshot.forEach((document) => {
+                    greetings.push({ id: document.id, ...document.data() });
                 });
                 window.allGreetings = greetings; // Save raw data
                 window.sortAndRender(); // Sort and render based on current criteria
             }, (error) => {
                 console.error("Error listening to greetings:", error);
-                document.getElementById('greetings-list').innerHTML = `<p class="text-red-500">שגיאה בטעינת הברכות: ${error.message}</p>`;
+                document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות: ${error.message}</p>`;
             });
         };
 
         // Call initialization on window load
         window.onload = window.initializeFirebase;
 
-        // Expose updateDoc and doc for toggleLike function
+        // Expose Firebase functions for use in the main script
         window.updateDoc = updateDoc;
         window.doc = doc;
-        window.arrayUnion = arrayUnion; // Expose for replies
-        window.serverTimestamp = serverTimestamp; // Expose the imported function
+        window.arrayUnion = arrayUnion;
+        window.serverTimestamp = serverTimestamp;
+        window.addDoc = addDoc;
+        window.getDownloadURL = getDownloadURL;
+        window.uploadBytes = uploadBytes;
+        window.storageRef = storageRef;
+        window.getStorage = getStorage;
+        window.getDoc = getDoc;
     </script>
 </head>
 <body class="bg-gray-50 text-gray-900 font-['Inter'] antialiased min-h-screen p-4 sm:p-8" onload="window.initializeFirebase()">
@@ -137,7 +176,7 @@
             <p class="mt-2 text-xl font-medium text-gray-800">דף ברכות אינטראקטיבי ומשוגע במיוחד</p>
             <div id="user-id-display" class="text-xs mt-2 text-gray-700 break-all" style="direction: ltr;">מזהה משתמש: טוען...</div>
 
-            <!-- NEW: Guest of Honor Login Button - FIX: Added onclick attribute -->
+            <!-- NEW: Guest of Honor Login Button -->
             <button id="guest-of-honor-login-button" onclick="loginGuestOfHonor()" class="absolute top-4 left-4 text-xs px-3 py-1 bg-red-500 text-white font-semibold rounded-lg hover:bg-red-600 transition duration-300 shadow-lg">
                 כניסת אורח הכבוד 👑
             </button>
@@ -188,7 +227,7 @@
                 <p class="text-gray-600">כתוב מילה אחת או משפט קצר (כגון: "אוהב לטייל") כדי לקבל שיר מלא.</p>
                 <input type="text" id="song-prompt" class="w-full p-3 border-2 border-pink-300 rounded-lg focus:ring-pink-500 focus:border-pink-500 transition duration-150" placeholder="לדוגמה: השף של הבית" dir="rtl" />
                 <button onclick="generateSong()" id="song-button" class="w-full bg-pink-600 text-white py-3 rounded-xl font-bold text-lg hover:bg-pink-700 transition duration-300 shadow-md disabled:bg-pink-400">צור את השיר</button>
-                <div id="song-output" class="mt-4 p-4 border-2 border-pink-300 bg-pink-50 rounded-lg whitespace-pre-line text-pink-700 min-h-20 flex items-center justify-center">
+                <div id="song-output" class="mt-4 p-4 border-2 border-pink-300 bg-pink-50 rounded-lg whitespace-pre-line text-pink-700 min-h-20 flex items-center justify-center custom-scroll">
                     <p class="text-pink-700 font-medium">כאן יופיע השיר המיוחד...</p>
                 </div>
             </div>
@@ -198,7 +237,7 @@
                 <h2 class="text-3xl font-bold text-green-700 flex items-center gap-2">🔢 עובדות על גיל 44 ושנת 1981</h2>
                 <p class="text-gray-600">כל לחיצה חושפת עובדה מפתיעה ומפורטת על גיל 44 או על שנת 1981 (מידע מעודכן).</p>
                 <button onclick="showNextFact()" id="fact-button" class="w-full bg-green-600 text-white py-3 rounded-xl font-bold text-lg hover:bg-green-700 transition duration-300 shadow-md disabled:bg-green-400">עובדה הבאה!</button>
-                <div id="fact-output" class="mt-4 p-4 border-2 border-green-300 bg-green-50 rounded-lg min-h-20 flex items-center justify-center">
+                <div id="fact-output" class="mt-4 p-4 border-2 border-green-300 bg-green-50 rounded-lg min-h-20 flex items-center justify-center custom-scroll">
                     <p class="text-green-700 font-medium">לחץ על הכפתור כדי לגלות עובדה ראשונה...</p>
                 </div>
             </div>
@@ -212,7 +251,7 @@
                 </div>
                 
                 <button onclick="generateGreetingsSummary()" id="summary-button" class="w-full bg-cyan-600 text-white py-3 rounded-xl font-bold text-lg hover:bg-cyan-700 transition duration-300 shadow-md disabled:bg-cyan-400">הפק סיכום ברכות חכם</button>
-                <div id="summary-output" class="mt-4 p-4 border-2 border-cyan-300 bg-cyan-50 rounded-lg min-h-20 flex items-center justify-center">
+                <div id="summary-output" class="mt-4 p-4 border-2 border-cyan-300 bg-cyan-50 rounded-lg min-h-20 flex items-center justify-center custom-scroll">
                     <p class="text-cyan-700 font-medium">כאן יופיע סיכום הברכות לאחר הלחיצה.</p>
                 </div>
             </div>
@@ -222,7 +261,7 @@
         <div id="greetings-section" class="p-6 bg-white rounded-xl shadow-2xl border-t-8 border-red-500">
             <h2 class="text-3xl font-bold text-red-700 mb-6">💌 הוסף ברכה אישית לינאי</h2>
             
-            <form id="greeting-form" class="space-y-4 p-4 border border-red-200 rounded-lg bg-red-50">
+            <form id="greeting-form" class="space-y-4 p-4 border border-red-200 rounded-lg bg-red-50" onsubmit="submitGreeting(event)">
                 <input type="text" id="greeter-name" required class="w-full p-3 border-2 border-red-300 rounded-lg focus:ring-red-500 focus:border-red-500" placeholder="שם המברך (חובה)" dir="rtl" />
                 <textarea id="greeting-text" rows="4" required class="w-full p-3 border-2 border-red-300 rounded-lg focus:ring-red-500 focus:border-red-500 resize-none" placeholder="כתוב את הברכה שלך כאן..." dir="rtl"></textarea>
 
@@ -236,8 +275,8 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700">הקלטת קול (עד 30 שניות)</label>
                         <div class="mt-1 flex gap-2">
-                            <button type="button" id="record-button" class="flex-1 p-2 bg-red-400 text-white rounded-lg hover:bg-red-500 transition duration-150">התחל הקלטה</button>
-                            <button type="button" id="stop-button" disabled class="flex-1 p-2 bg-gray-400 text-white rounded-lg disabled:opacity-50">סיים הקלטה</button>
+                            <button type="button" id="record-button" onclick="startRecording()" class="flex-1 p-2 bg-red-400 text-white rounded-lg hover:bg-red-500 transition duration-150">התחל הקלטה</button>
+                            <button type="button" id="stop-button" onclick="stopRecording()" disabled class="flex-1 p-2 bg-gray-400 text-white rounded-lg disabled:opacity-50">סיים הקלטה</button>
                         </div>
                         <audio id="audio-preview" controls class="mt-2 w-full hidden"></audio>
                     </div>
@@ -291,7 +330,9 @@
         // window.db, window.userId, window.getGreetingsCollectionRef, window.loadGreetings, window.allGreetings
         
         // --- API Keys and Endpoints ---
-        const apiKey = "AIzaSyCr9HX-YVyzIwDs2aDh2X1e2I44jiWKifY"; 
+        // IMPORTANT: In a real environment, the API key should be protected.
+        // For the canvas environment, we leave it blank and the runtime provides it.
+        const apiKey = ""; 
         const TEXT_MODEL = 'gemini-2.5-flash-preview-09-2025';
         const IMAGE_MODEL_PREDICT = 'imagen-3.0-generate-002:predict';
         
@@ -322,7 +363,8 @@
         async function fetchAI(apiUrl, payload, maxRetries = 3) {
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
-                    const response = await fetch(apiUrl, {
+                    const url = `${apiUrl}${apiKey ? `?key=${apiKey}` : ''}`;
+                    const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -336,7 +378,6 @@
 
                     if (!response.ok) {
                         const errorText = await response.text();
-                        // *** MODIFIED: Specific 429 Error Message on Final Failure ***
                         if (response.status === 429) {
                             throw new Error("השרתים עמוסים כרגע (שגיאה 429). אנא נסה שוב בעוד דקה.");
                         }
@@ -348,10 +389,8 @@
                 } catch (error) {
                     if (attempt === maxRetries) {
                         console.error(`Fetch failed after ${maxRetries} attempts:`, error);
-                        // *** MODIFIED: General Critical Error Message after Retries ***
                         throw new Error("שגיאה קריטית בחיבור לשרת הבינה המלאכותית לאחר ניסיונות חוזרים.");
                     }
-                    // For network errors or other non-429 errors, we still apply backoff before the next attempt
                     const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
@@ -370,22 +409,30 @@
             const closeButton = modal.querySelector('button');
             
             // Reset classes
-            titleElement.classList.remove('text-red-600', 'text-green-600');
-            closeButton.classList.remove('bg-red-500', 'bg-green-500', 'hover:bg-red-600', 'hover:bg-green-600');
+            titleElement.classList.remove('text-red-600', 'text-green-600', 'text-indigo-600', 'text-purple-600', 'text-pink-600', 'text-cyan-600');
+            closeButton.classList.remove('bg-red-500', 'bg-green-500', 'bg-indigo-500', 'bg-purple-500', 'bg-pink-500', 'bg-cyan-500', 'hover:bg-red-600', 'hover:bg-green-600', 'hover:bg-indigo-600', 'hover:bg-purple-600', 'hover:bg-pink-600', 'hover:bg-cyan-600');
 
-            // Set colors based on success/error/custom
-            if (colorType === 'green' || title === 'הצלחה!' || title.includes('נוצרה') || title.includes('הושלם') || title.includes('נחשפה')) {
-                titleElement.classList.add('text-green-600');
-                closeButton.classList.add('bg-green-500', 'hover:bg-green-600');
-            } else { // Default to red
-                titleElement.classList.add('text-red-600');
-                closeButton.classList.add('bg-red-500', 'hover:bg-red-600');
+            // Set colors based on context
+            let color = 'red';
+            if (colorType === 'green' || title.includes('הצלחה') || title.includes('נחשפה') || title.includes('אורח הכבוד')) {
+                color = 'green';
+            } else if (title.includes('חלום')) {
+                color = 'indigo';
+            } else if (title.includes('נבואה')) {
+                color = 'purple';
+            } else if (title.includes('שיר')) {
+                color = 'pink';
+            } else if (title.includes('סיכום') || colorType === 'cyan') {
+                color = 'cyan';
             }
 
+            titleElement.classList.add(`text-${color}-600`);
+            closeButton.classList.add(`bg-${color}-500`, `hover:bg-${color}-600`);
+            
             modal.classList.remove('hidden');
             modal.classList.add('flex');
             
-            if (title === 'הצלחה!' || title.includes('נוצרה') || title.includes('הושלם') || title.includes('נחשפה')) {
+            if (color !== 'red') { // Auto-close success/info messages
                 setTimeout(closeModal, 4000);
             }
         }
@@ -399,9 +446,8 @@
         }
         window.closeModal = closeModal; // Expose to HTML button
 
-        // --- GUEST OF HONOR LOGIN LOGIC (Ensuring global access) ---
+        // --- GUEST OF HONOR LOGIN LOGIC ---
         function loginGuestOfHonor() {
-            console.log("Guest of Honor button clicked. Attempting login..."); // LOG ADDED FOR DEBUGGING
             const password = prompt("אנא הזן את סיסמת אורח הכבוד:");
             if (password === GUEST_OF_HONOR_SECRET) {
                 isGuestOfHonor = true;
@@ -414,25 +460,21 @@
         window.loginGuestOfHonor = loginGuestOfHonor;
 
         function displayGuestOfHonorView() {
-            // 1. Update the login button display
             const loginButton = document.getElementById('guest-of-honor-login-button');
             loginButton.innerHTML = '👑 מחובר כ"אורח הכבוד"';
             loginButton.classList.remove('bg-red-500', 'hover:bg-red-600');
             loginButton.classList.add('bg-green-600', 'hover:bg-green-700');
             loginButton.disabled = true;
-            // Also remove the onclick attribute after successful login
             loginButton.removeAttribute('onclick');
 
-
-            // 2. Show the special section
-            const specialSection = document.getElementById('guest-of-honor-special-content');
-            specialSection.classList.remove('hidden');
+            document.getElementById('guest-of-honor-special-content').classList.remove('hidden');
         }
 
 
         // --- SORTING AND FILTERING LOGIC ---
         function setSortCriteria(criteria) {
             currentSortCriteria = criteria;
+            
             document.getElementById('sort-newest').classList.toggle('bg-red-600', criteria === 'newest');
             document.getElementById('sort-newest').classList.toggle('text-white', criteria === 'newest');
             document.getElementById('sort-newest').classList.toggle('bg-red-200', criteria !== 'newest');
@@ -445,13 +487,13 @@
 
             sortAndRender();
         }
-        window.setSortCriteria = setSortCriteria; // Expose
+        window.setSortCriteria = setSortCriteria; 
 
         function setFilterTone(tone) {
             currentFilterTone = tone;
             sortAndRender();
         }
-        window.setFilterTone = setFilterTone; // Expose
+        window.setFilterTone = setFilterTone; 
         
         function sortAndRender() {
             let sortedGreetings = [...window.allGreetings];
@@ -461,10 +503,12 @@
                 sortedGreetings = sortedGreetings.filter(g => g.tone === currentFilterTone);
             }
 
-            // 2. Sort
+            // 2. Sort (in JS as Firestore has limitations on complex query ordering)
             if (currentSortCriteria === 'likes') {
+                // Ensure likesCount is treated as a number, defaulting to 0
                 sortedGreetings.sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
             } else { // 'newest'
+                // Sort by Firestore Timestamp
                 sortedGreetings.sort((a, b) => {
                     const timeA = a.timestamp?.toMillis ? a.timestamp.toMillis() : 0;
                     const timeB = b.timestamp?.toMillis ? b.timestamp.toMillis() : 0;
@@ -479,7 +523,7 @@
             updateToneFilterOptions();
             updateTopWishes();
         }
-        window.sortAndRender = sortAndRender; // Expose
+        window.sortAndRender = sortAndRender; 
 
 
         // --- TONE ANALYSIS LOGIC ---
@@ -491,15 +535,14 @@
                 contents: [{ parts: [{ text: userQuery }] }],
                 systemInstruction: { parts: [{ text: systemPrompt }] },
             };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
             
             try {
                 const result = await fetchAI(apiUrl, payload);
                 let tone = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "לא נותח";
-                return tone.replace(/["'״]/g, '', 'g').split('\n')[0].trim();
+                return tone.replace(/["'״\n]/g, '', 'g').trim();
             } catch (e) {
                 console.error("Tone analysis failed:", e);
-                // Return a specific value if AI analysis fails due to API/429
                 return "שגיאת ניתוח"; 
             }
         }
@@ -520,7 +563,7 @@
                     }
                 }
             };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
 
             try {
                 const result = await fetchAI(apiUrl, payload);
@@ -534,14 +577,16 @@
 
         async function updateTopWishes() {
             const outputElement = document.getElementById('top-wishes');
-            if (window.allGreetings.length === 0) {
-                outputElement.innerHTML = `<p class="text-gray-500 text-lg">אין מספיק נתונים לניתוח איחולים.</p>`;
+            const nonErrorGreetings = window.allGreetings.filter(g => g.tone !== 'שגיאת ניתוח' && g.tone !== 'לא נותח');
+            
+            if (nonErrorGreetings.length < 2) {
+                outputElement.innerHTML = `<p class="text-gray-500 text-lg">יש ${window.allGreetings.length} ברכות כרגע. צריך לפחות 2 לניתוח AI מתקדם.</p>`;
                 return;
             }
             
             outputElement.innerHTML = `<span class="animate-pulse text-cyan-600">טוען איחולים מובילים...</span>`;
 
-            const greetingTexts = window.allGreetings.map(g => g.text);
+            const greetingTexts = nonErrorGreetings.map(g => g.text);
             
             try {
                 const topWishes = await getTopWishesFromAI(greetingTexts);
@@ -563,6 +608,7 @@
             const toneFilterSelect = document.getElementById('tone-filter'); 
             if (!toneFilterSelect) return; 
 
+            // Get unique, valid tones
             const tones = [...new Set(window.allGreetings.map(g => g.tone).filter(t => t && t !== 'לא נותח' && t !== 'שגיאת ניתוח'))];
             
             toneFilterSelect.innerHTML = '<option value="">הצג הכל</option>';
@@ -572,616 +618,653 @@
                 option.innerText = tone;
                 toneFilterSelect.appendChild(option);
             });
-            toneFilterSelect.value = currentFilterTone; // Restore current filter
+            // Re-select the currently active filter value
+            toneFilterSelect.value = currentFilterTone; 
         }
 
-        // --- AI REPLY GENERATION LOGIC ---
-        window.generateAIReply = async (greetingId, senderName, greetingText) => {
-            const input = document.getElementById(`reply-input-${greetingId}`);
-            const aiButton = document.getElementById(`ai-reply-button-${greetingId}`);
+        // --- AI SUMMARY GENERATION FOR ALL GUESTS ---
+        async function generateGreetingsSummary() {
+            const summaryButton = 'summary-button';
+            const outputElement = document.getElementById('summary-output');
+            const defaultButtonText = 'הפק סיכום ברכות חכם';
 
-            // 1. Ensure the reply box is open
-            window.toggleReplyBox(greetingId, true); 
-
-            aiButton.disabled = true;
-            aiButton.innerHTML = '🤖 מנסח...';
-
-            // The system prompt defines the persona and task.
-            const systemPrompt = `אתה פועל כ"ינאי" (Yanai), איש יום הולדת שקיבל ברכה. מטרתך היא להשיב בצורה חמה, אישית, ומחמיאה לברכה הבאה. הברכה נשלחה על ידי ${senderName}. הגב במשפט או שניים קצרים, תודה לכותב/ת, ואזם לשמירה על טון חברי ומעט הומוריסטי אם מתאים. השב רק בטקסט התגובה, ללא שם השולח או כותרות.`;
-            const userQuery = `הגב לברכה זו: "${greetingText}"`;
-
-            const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-            };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
-
-            try {
-                const result = await fetchAI(apiUrl, payload);
-                const replyText = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "לא הצלחתי לחשוב על תגובה כרגע. סליחה!";
-                
-                input.value = replyText;
-
-            } catch (e) {
-                console.error("AI Reply generation failed:", e);
-                showModal('שגיאת AI', `שגיאה ביצירת תגובת AI: ${e.message}`);
-            } finally {
-                aiButton.disabled = false;
-                aiButton.innerHTML = '🤖 צור תגובת AI';
-            }
-        }
-
-
-        // --- AI GENERATION LOGIC ---
-
-        // 1. מכונת החלומות: יצירת תמונה
-        async function generateDreamImage() {
-            const prompt = document.getElementById('dream-prompt').value.trim();
-            if (!prompt) {
-                showModal('שגיאה', 'אנא כתוב זיכרון או חלום כדי ליצור תמונה.');
+            if (window.allGreetings.length === 0) {
+                outputElement.innerHTML = `<p class="text-red-500">אין ברכות לשם סיכום.</p>`;
                 return;
             }
-            setButtonLoading('dream-button', true, 'צור תמונת חלום');
-            const outputElement = document.getElementById('dream-output');
-            outputElement.innerHTML = `<div class="text-center text-indigo-700 p-4"><span class="animate-spin inline-block h-8 w-8 border-4 border-indigo-500 border-t-transparent rounded-full mb-3"></span><p class="font-bold">מכונת החלומות פועלת, ממירה זיכרון לתמונה...</p></div>`;
 
-            // CRITICAL UPDATE: Focusing the base prompt on the user's memory content.
-            const fullPrompt = `A lively, emotional, and high-quality cinematic photo of a celebratory Israeli event. The central figures are Yanai and his family, capturing a moment of warm nostalgia and happiness. The specific memory to focus on is: "${prompt}".`;
+            const greetingTexts = window.allGreetings.map(g => `(${g.name}): ${g.text}`).join('\n---\n');
+            const prompt = `סכם את אוסף הברכות הבא לינאי, שחוגג 44, בטקסט אמוציונלי ומעורר השראה באורך של 4-5 משפטים בלבד. תאר את הרגשות הכלליים העולים מהברכות, את האיחולים המרכזיים ואת האהבה הרבה שמופנית אליו. הברכות: \n\n${greetingTexts}`;
             
-            const payload = { 
-                instances: [{ prompt: fullPrompt }], 
-                parameters: { "sampleCount": 1 } 
+            setButtonLoading(summaryButton, true, defaultButtonText);
+            outputElement.innerHTML = `<p class="text-cyan-700 font-medium animate-pulse">הבינה המלאכותית מנסחת סיכום מרגש... זה לוקח רגע.</p>`;
+
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                tools: [{ "google_search": {} }], // Use grounding for up-to-date context if needed
+                systemInstruction: { parts: [{ text: "אתה משורר ומסכם אירועים חגיגיים בעברית רהוטה ומרגשת. שמור על טון חם ואוהב." }] },
             };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL_PREDICT}?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
 
             try {
                 const result = await fetchAI(apiUrl, payload);
-                const base64Data = result?.predictions?.[0]?.bytesBase64Encoded;
+                const summaryText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (summaryText) {
+                    outputElement.innerHTML = `<p class="text-cyan-800 whitespace-pre-line">${summaryText}</p>`;
+                    showModal('סיכום ברכות נוצר!', 'ניתוח הברכות הושלם בהצלחה. הסיכום מופיע למטה.', 'cyan');
+                } else {
+                    outputElement.innerHTML = `<p class="text-red-500">ה-AI לא הצליח ליצור סיכום. נסה שוב מאוחר יותר.</p>`;
+                    showModal('שגיאה', 'ה-AI לא הצליח ליצור סיכום.', 'red');
+                }
+            } catch (e) {
+                outputElement.innerHTML = `<p class="text-red-500">שגיאה: ${e.message}</p>`;
+                showModal('שגיאה ב-AI', e.message, 'red');
+            } finally {
+                setButtonLoading(summaryButton, false, defaultButtonText);
+            }
+        }
+        window.generateGreetingsSummary = generateGreetingsSummary;
+        
+        // --- AI SPECIAL SUMMARY FOR YANAI (Guest of Honor) ---
+        async function generateYanaiSpecialSummary() {
+            if (!isGuestOfHonor) {
+                showModal('גישה נדחתה', 'רק אורח הכבוד ינאי יכול לצפות בסיכום המיוחד.', 'red');
+                return;
+            }
+
+            const summaryButton = 'yanai-summary-button';
+            const outputElement = document.getElementById('yanai-summary-ai-output');
+            const defaultButtonText = 'לחץ כאן כדי לחשוף את סיכום ה-AI האמוציונלי המיוחד!';
+
+            if (window.allGreetings.length === 0) {
+                outputElement.innerHTML = `<p class="text-red-500">אין ברכות ליצור מהן דו"ח אישי.</p>`;
+                return;
+            }
+
+            const greetingTexts = window.allGreetings.map(g => `(${g.name}): ${g.text}`).join('\n---\n');
+            const prompt = `כתוב דו"ח אמוציונלי, אישי ומרגש במיוחד (5-6 משפטים) המופנה ישירות אל ינאי (אורח הכבוד) על בסיס הברכות שנאספו. התייחס ספציפית לרגשות שהועלו על ידי בני המשפחה והחברים, ציין את האספקטים הייחודיים לינאי שעלו מהברכות, וסיים באיחול חזק ומחמם לב. הברכות: \n\n${greetingTexts}`;
+            
+            setButtonLoading(summaryButton, true, defaultButtonText);
+            outputElement.innerHTML = `<p class="text-green-700 font-medium animate-pulse">הדו"ח האישי והסודי נכתב עבורך כעת... התרגש!</p>`;
+
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                systemInstruction: { parts: [{ text: "אתה כותב נאומים אישיים לאורחי כבוד, בטון חגיגי, מרגש, מכיל ומלא הערכה. פנה לאורח הכבוד בגוף שני." }] },
+            };
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
+
+            try {
+                const result = await fetchAI(apiUrl, payload);
+                const summaryText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (summaryText) {
+                    outputElement.innerHTML = `<p class="text-green-800 whitespace-pre-line font-bold text-lg">${summaryText}</p>`;
+                    showModal('דו"ח אישי נחשף!', 'ינאי, הדו"ח האישי שלך מוכן! קריאה מרגשת.', 'green');
+                } else {
+                    outputElement.innerHTML = `<p class="text-red-500">ה-AI לא הצליח ליצור דו"ח. נסה שוב מאוחר יותר.</p>`;
+                    showModal('שגיאה', 'ה-AI לא הצליח ליצור דו"ח.', 'red');
+                }
+            } catch (e) {
+                outputElement.innerHTML = `<p class="text-red-500">שגיאה: ${e.message}</p>`;
+                showModal('שגיאה ב-AI', e.message, 'red');
+            } finally {
+                setButtonLoading(summaryButton, false, defaultButtonText);
+            }
+        }
+        window.generateYanaiSpecialSummary = generateYanaiSpecialSummary;
+
+
+        // --- IMAGE GENERATION (DREAM MACHINE) ---
+        async function generateDreamImage() {
+            const promptText = document.getElementById('dream-prompt').value.trim();
+            const dreamButton = 'dream-button';
+            const outputElement = document.getElementById('dream-output');
+            const defaultButtonText = 'צור תמונת חלום';
+
+            if (!promptText) {
+                showModal('חובה להזין טקסט', 'אנא כתוב זיכרון או חלום כדי ליצור תמונה.', 'red');
+                return;
+            }
+
+            setButtonLoading(dreamButton, true, defaultButtonText);
+            outputElement.innerHTML = `<p class="text-indigo-600 font-medium animate-pulse">יוצר חלום ויזואלי... זה יכול לקחת עד 30 שניות.</p>`;
+
+            // Combine Hebrew prompt with style guidance for better results
+            const fullPrompt = `${promptText}, style: cinematic, high detail, vibrant, family-friendly, Israeli landscape, photorealistic`;
+
+            const payload = { 
+                instances: [{ prompt: fullPrompt }], 
+                parameters: { "sampleCount": 1, "aspectRatio": "1:1" } 
+            };
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL_PREDICT}`;
+
+            try {
+                const result = await fetchAI(apiUrl, payload);
+                const base64Data = result.predictions?.[0]?.bytesBase64Encoded;
 
                 if (base64Data) {
                     const imageUrl = `data:image/png;base64,${base64Data}`;
-                    outputElement.innerHTML = `
-                        <img src="${imageUrl}" alt="${prompt}" class="w-full h-auto rounded-lg shadow-xl border-4 border-indigo-400 object-cover max-h-96">
-                        <p class="text-xs text-gray-500 mt-2">התמונה נוצרה על בסיס: "${prompt}"</p>
-                    `;
-                    showModal('הצלחה!', 'תמונת החלום נוצרה בהצלחה!');
+                    outputElement.innerHTML = `<img src="${imageUrl}" class="w-full h-auto rounded-lg shadow-xl" alt="תמונת חלום שנוצרה">`;
+                    showModal('תמונת החלום נוצרה!', 'תמונה יפהפייה נוצרה בהצלחה. אל תשכח לשתף אותה!', 'indigo');
                 } else {
-                    throw new Error("לא התקבלה תמונה מה-AI.");
+                    outputElement.innerHTML = `<p class="text-red-500">שגיאה ביצירת תמונה. נסה עם פרומפט אחר.</p>`;
+                    showModal('שגיאה', 'לא התקבלה תמונה. נסה שוב.', 'red');
                 }
             } catch (e) {
-                outputElement.innerHTML = `<p class="text-red-500 font-bold">שגיאה ביצירת תמונה. אנא נסה שנית.</p>`;
-                showModal('שגיאה', `שגיאה ביצירת תמונת החלום: ${e.message}`);
+                outputElement.innerHTML = `<p class="text-red-500">שגיאה: ${e.message}</p>`;
+                showModal('שגיאה ב-AI', e.message, 'red');
             } finally {
-                setButtonLoading('dream-button', false, 'צור תמונת חלום');
+                setButtonLoading(dreamButton, false, defaultButtonText);
             }
         }
         window.generateDreamImage = generateDreamImage;
 
-
-        // 2. מכונת הזמן: נבואה ליום הולדת 60
+        // --- TEXT GENERATION (PROPHECY) ---
         async function generateProphecy() {
-            setButtonLoading('prophecy-button', true, 'חשוף את הנבואה');
+            const prophecyButton = 'prophecy-button';
             const outputElement = document.getElementById('prophecy-output');
-            outputElement.innerHTML = `<div class="text-center text-purple-700"><span class="animate-spin inline-block h-6 w-6 border-2 border-purple-500 border-t-transparent rounded-full mb-2"></span><p class="font-bold">מכונת הזמן מחשבת את העתיד...</p></div>`;
+            const defaultButtonText = 'חשוף את הנבואה';
 
-            const userQuery = "כתוב נבואה חמה, מרגשת, ומפורטת (כ-100 מילים) על מה ינאי, שהיום חוגג 44, ישיג ואיך יראה ביום הולדתו ה-60. הנבואה צריכה לכלול 3 הישגים מרכזיים (מקצועי, משפחתי, רוחני/תחביבים). השב בטקסט מעוצב בפסקאות קצרות.";
-            const systemPrompt = "אתה נביא מרגש ומעורר השראה. כתוב נבואה חיובית ומלאת תקווה בעברית ליום הולדתו ה-60 של ינאי. השב רק בטקסט הנבואה המנוסח היטב.";
+            setButtonLoading(prophecyButton, true, defaultButtonText);
+            outputElement.innerHTML = `<p class="text-purple-700 font-medium animate-pulse">הנבואה נכתבת בכתב סתרים... עוד רגע זה נחשף.</p>`;
 
-            const payload = { 
-                contents: [{ parts: [{ text: userQuery }] }], 
-                systemInstruction: { parts: [{ text: systemPrompt }] }
+            const prompt = "כתוב נבואה מרגשת ומפורטת לעתידו של ינאי, שתתרחש ביום הולדתו ה-60 (בעוד 16 שנים). הנבואה צריכה לכלול 4-5 משפטים על אושר משפחתי, הצלחה מקצועית וחוויות טיולים יוצאות דופן. השתמש בטון דרמטי וחגיגי.";
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                systemInstruction: { parts: [{ text: "אתה נביא ידידותי ומעורר השראה, כותב נבואות אישיות באווירה חמה ומשפחתית בעברית." }] },
             };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
 
             try {
                 const result = await fetchAI(apiUrl, payload);
-                const prophecyText = result.candidates?.[0]?.content?.parts?.[0]?.text || "לא ניתן היה ליצור נבואה. נסה שוב.";
-                outputElement.innerHTML = `<p class="text-purple-800 font-bold whitespace-pre-line">${prophecyText}</p>`;
-                showModal('הצלחה!', 'נבואת יום ההולדת 60 נחשפה!');
+                const prophecyText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (prophecyText) {
+                    outputElement.innerHTML = `<p class="text-purple-800 whitespace-pre-line font-bold">${prophecyText}</p>`;
+                    showModal('הנבואה נחשפה!', 'נבואת יום ההולדת ה-60 מוכנה. עתיד מזהיר לפניך!', 'purple');
+                } else {
+                    outputElement.innerHTML = `<p class="text-red-500">הנבואה נכשלה. נסה שוב.</p>`;
+                    showModal('שגיאה', 'ה-AI לא הצליח לחשוף את הנבואה.', 'red');
+                }
             } catch (e) {
-                outputElement.innerHTML = `<p class="text-red-500 font-bold">שגיאה במכונת הזמן. אנא נסה שנית.</p>`;
-                showModal('שגיאה', `שגיאה במכונת הזמן: ${e.message}`);
+                outputElement.innerHTML = `<p class="text-red-500">שגיאה: ${e.message}</p>`;
+                showModal('שגיאה ב-AI', e.message, 'red');
             } finally {
-                setButtonLoading('prophecy-button', false, 'חשוף את הנבואה');
+                setButtonLoading(prophecyButton, false, defaultButtonText);
             }
         }
         window.generateProphecy = generateProphecy;
-
-
-        // 3. שיר אישי לינאי
+        
+        // --- TEXT GENERATION (SONG) ---
         async function generateSong() {
-            const prompt = document.getElementById('song-prompt').value.trim() || "אוהב את המשפחה";
-            setButtonLoading('song-button', true, 'צור את השיר');
+            const songPromptText = document.getElementById('song-prompt').value.trim();
+            const songButton = 'song-button';
             const outputElement = document.getElementById('song-output');
-            outputElement.innerHTML = `<div class="text-center text-pink-700"><span class="animate-spin inline-block h-6 w-6 border-2 border-pink-500 border-t-transparent rounded-full mb-2"></span><p class="font-bold">כותב השירים מנסח את הלהיט הבא...</p></div>`;
+            const defaultButtonText = 'צור את השיר';
 
-            const userQuery = `כתוב שיר/פזמון מלא (4 בתים מחורזים, כ-80 מילים) לכבוד יום ההולדת ה-44 של ינאי. השתמש בנושא הבא כהשראה: "${prompt}". הטון צריך להיות שמח ומפרגן.`;
-            const systemPrompt = "אתה משורר כישרוני. כתוב שיר חגיגי ומחורז בעברית לכבוד יום הולדת. השב רק בטקסט השיר המעוצב בפסקאות קצרות.";
+            if (!songPromptText) {
+                showModal('חובה להזין טקסט', 'אנא הזן מילה או משפט קצר ליצירת שיר.', 'red');
+                return;
+            }
 
-            const payload = { 
-                contents: [{ parts: [{ text: userQuery }] }], 
-                systemInstruction: { parts: [{ text: systemPrompt }] }
+            setButtonLoading(songButton, true, defaultButtonText);
+            outputElement.innerHTML = `<p class="text-pink-700 font-medium animate-pulse">ה-AI מלחין שיר אישי לינאי... כמעט מוכן!</p>`;
+
+            const prompt = `כתוב שיר קצר בעברית, בן 3 בתים (4 שורות כל אחד) עם חרוזים, שנושאו המרכזי הוא: ${songPromptText}. השיר מיועד לינאי ליום הולדתו ה-44. השיר צריך להיות שמח, מלא אהבה ומתאים לנושא.`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                systemInstruction: { parts: [{ text: "אתה כותב שירים מוכשר ומרגש. השב רק בשורות השיר עצמן, ללא כותרות או הסברים." }] },
             };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
 
             try {
                 const result = await fetchAI(apiUrl, payload);
-                const songText = result.candidates?.[0]?.content?.parts?.[0]?.text || "לא ניתן היה ליצור שיר. נסה שוב.";
-                outputElement.innerHTML = `<p class="text-pink-800 font-bold whitespace-pre-line">${songText}</p>`;
-                showModal('הצלחה!', 'השיר האישי נוצר!');
+                const songText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (songText) {
+                    outputElement.innerHTML = `<p class="text-pink-800 whitespace-pre-line font-bold">${songText}</p>`;
+                    showModal('השיר נוצר!', 'שיר אישי חדש הולחן בהצלחה!', 'pink');
+                } else {
+                    outputElement.innerHTML = `<p class="text-red-500">יצירת השיר נכשלה. נסה עם נושא אחר.</p>`;
+                    showModal('שגיאה', 'ה-AI לא הצליח ליצור שיר.', 'red');
+                }
             } catch (e) {
-                outputElement.innerHTML = `<p class="text-red-500 font-bold">שגיאה ביצירת שיר. אנא נסה שנית.</p>`;
-                showModal('שגיאה', `שגיאה בכותב השירים: ${e.message}`);
+                outputElement.innerHTML = `<p class="text-red-500">שגיאה: ${e.message}</p>`;
+                showModal('שגיאה ב-AI', e.message, 'red');
             } finally {
-                setButtonLoading('song-button', false, 'צור את השיר');
+                setButtonLoading(songButton, false, defaultButtonText);
             }
         }
         window.generateSong = generateSong;
 
-        
-        // 4. עובדות על גיל 44 ושנת 1981 (עם Google Search)
-        async function showNextFact() {
-            const outputElement = document.getElementById('fact-output');
-            setButtonLoading('fact-button', true, 'טוען עובדה...');
-            outputElement.innerHTML = `<div class="text-center text-green-700"><span class="animate-spin inline-block h-6 w-6 border-2 border-green-500 border-t-transparent rounded-full mb-2"></span><p class="font-bold">מחפש עובדה מדהימה (מידע עדכני)...</p></div>`;
 
-            const is1981 = factIndex++ % 2 === 0;
-            const factType = is1981 ? "על שנת 1981" : "על גיל 44";
-            const searchTopic = is1981 ? "מעניינת על שנת 1981" : "על גיל 44 או המספר 44";
-
-            const userQuery = `מצא עובדה אחת מרתקת ומפורטת (עד 50 מילים) על ${searchTopic} והסבר אותה בהרחבה קצרה.`;
-            const systemPrompt = `אתה היסטוריון חובב טריוויה. ספק עובדה אחת מרתקת ומפורטת בעברית על הנושא המבוקש. השב רק בטקסט העובדה המנוסח היטב. השתמש בכלי החיפוש.`;
-
+        // --- FACT GENERATION ---
+        async function getFact(topic) {
+            const prompt = topic === '1981' 
+                ? "ספק עובדה היסטורית, מדעית או תרבותית מרתקת, פחות ידועה, על שנת 1981. השב בעברית בטקסט קצר, ממוקד ומפורט, המתאים לברכת יום הולדת."
+                : "ספק עובדה מדעית/תרבותית/ביולוגית/היסטורית מפתיעה ומפורטת על המספר 44 או על גיל 44 (בהקשר חיובי). השב בעברית בטקסט קצר, ממוקד ומפורט.";
+            
             const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-                tools: [{ "google_search": {} }],
+                contents: [{ parts: [{ text: prompt }] }],
+                tools: [{ "google_search": {} }], // Use grounding for real-time facts
+                systemInstruction: { parts: [{ text: "אתה מומחה לידע כללי וטריוויה. השב רק בעובדה המבוקשת." }] },
             };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
 
+            const result = await fetchAI(apiUrl, payload);
+            return result.candidates?.[0]?.content?.parts?.[0]?.text || `לא נמצאה עובדה מרתקת על ${topic}.`;
+        }
+        
+        async function showNextFact() {
+            const factButton = 'fact-button';
+            const outputElement = document.getElementById('fact-output');
+            const defaultButtonText = 'עובדה הבאה!';
+
+            setButtonLoading(factButton, true, defaultButtonText);
+            outputElement.innerHTML = `<p class="text-green-700 font-medium animate-pulse">מחפש עובדה סודית ומעניינת...</p>`;
+            
+            const topic = factIndex % 2 === 0 ? '44' : '1981';
+            factIndex++; // Cycle next
+            
             try {
-                const result = await fetchAI(apiUrl, payload);
-                const factText = result.candidates?.[0]?.content?.parts?.[0]?.text || "לא נמצאה עובדה מרתקת. נסה שוב.";
-                outputElement.innerHTML = `<p class="text-green-800 font-bold whitespace-pre-line">${factText}</p>`;
+                const fact = await getFact(topic);
+                outputElement.innerHTML = `<p class="text-green-800 font-bold">${topic === '44' ? '🔢 עובדה על גיל 44:' : '🎈 עובדה על שנת 1981:'}</p><p class="mt-2 text-green-700">${fact}</p>`;
+                showModal('עובדה נחשפה!', `נחשפה עובדה חדשה על ${topic}.`, 'green');
             } catch (e) {
-                outputElement.innerHTML = `<p class="text-red-500 font-bold">שגיאה במציאת עובדה. אנא נסה שנית.</p>`;
+                outputElement.innerHTML = `<p class="text-red-500">שגיאה: ${e.message}</p>`;
+                showModal('שגיאה ב-AI', e.message, 'red');
             } finally {
-                setButtonLoading('fact-button', false, 'עובדה הבאה!');
+                setButtonLoading(factButton, false, defaultButtonText);
             }
         }
         window.showNextFact = showNextFact;
 
-        
-        // 5. סיכום הברכות הכללי (לשימוש ציבורי)
-        async function generateGreetingsSummary() {
-            if (window.allGreetings.length === 0) {
-                document.getElementById('summary-output').innerHTML = `<p class="text-red-500 font-bold">לא ניתן ליצור סיכום, עדיין אין ברכות!</p>`;
-                return;
-            }
-            setButtonLoading('summary-button', true, 'הפק סיכום ברכות חכם');
-            const outputElement = document.getElementById('summary-output');
-            outputElement.innerHTML = `<div class="text-center text-cyan-700"><span class="animate-spin inline-block h-8 w-8 border-4 border-cyan-500 border-t-transparent rounded-full mb-3"></span><p class="font-bold">הבינה המלאכותית מנתחת את רגשות האורחים...</p></div>`;
-            const greetingData = window.allGreetings.map(g => 
-                `מאת: ${g.greeterName}, טון: ${g.tone || 'לא נותח'}, טקסט: "${g.text.substring(0, 100)}..."`
-            ).join('\n---\n');
-            const userQuery = `להלן רשימה של ${window.allGreetings.length} ברכות יום הולדת לינאי. אנא כתוב סיכום קצר (עד 5 משפטים) ומרגש המדגיש את הנושאים העיקריים, את הטונים הבולטים (למשל, הומור, אהבה, הערכה) ואת הדבר המרכזי שהאורחים רוצים לאחל לו.`;
-            const systemPrompt = `אתה אנליסט רגשות וסופר. כתוב סיכום אישי וחם בעברית על הברכות שקיבל ינאי ליום הולדתו ה-44, בהתבסס על הנתונים הבאים. השב רק בסיכום המרגש. הנתונים: \n\n${greetingData}`;
-            const payload = { contents: [{ parts: [{ text: userQuery }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
 
-            try {
-                const result = await fetchAI(apiUrl, payload);
-                const summaryText = result.candidates?.[0]?.content?.parts?.[0]?.text || "לא ניתן היה ליצור סיכום. נסה שוב.";
-                outputElement.innerHTML = `<p class="text-cyan-700 font-bold whitespace-pre-line">${summaryText}</p>`;
-                showModal('הצלחה!', 'ניתוח הברכות הושלם בהצלחה!');
-            } catch (e) {
-                outputElement.innerHTML = `<p class="text-red-500">${e.message}</p>`;
-                showModal('שגיאה', `שגיאה ביצירת הסיכום: ${e.message}`);
-            }
-            setButtonLoading('summary-button', false, 'הפק סיכום ברכות חכם');
-        }
-        window.generateGreetingsSummary = generateGreetingsSummary;
-        
-        // 6. NEW: סיכום אישי לינאי (לאורח הכבוד)
-        async function generateYanaiSpecialSummary() {
-            if (window.allGreetings.length === 0) {
-                document.getElementById('yanai-summary-ai-output').innerHTML = `<p class="text-red-500 font-bold">לא ניתן ליצור סיכום, עדיין אין ברכות!</p>`;
-                return;
-            }
-            setButtonLoading('yanai-summary-button', true, 'לחץ כאן כדי לחשוף את סיכום ה-AI האמוציונלי המיוחד!');
-            const outputElement = document.getElementById('yanai-summary-ai-output');
-            outputElement.innerHTML = `<div class="text-center text-green-700"><span class="animate-spin inline-block h-8 w-8 border-4 border-green-500 border-t-transparent rounded-full mb-3"></span><p class="font-bold">הבינה המלאכותית מנתחת את רגשות האהבה וההערכה...</p></div>`;
-            
-            const greetingData = window.allGreetings.map(g => 
-                `מאת: ${g.greeterName}, טון: ${g.tone || 'לא נותח'}, טקסט: "${g.text.substring(0, 100)}..."`
-            ).join('\n---\n');
-            
-            const userQuery = `להלן רשימה של ${window.allGreetings.length} ברכות יום הולדת לינאי. אנא כתוב סיכום סופר-אישי, אמוציונלי, ומחמם לב (עד 5 משפטים) המדגיש במיוחד את נושאי האהבה, ההערכה והגאווה המשפחתית שעולים מהברכות. סגנון: אישי, כותב מתוך מערכת קרובה.`;
-            const systemPrompt = `אתה סופר אישי ורגשן. כתוב סיכום אישי, חם ומרגש בעברית על הברכות שקיבל ינאי ליום הולדתו ה-44, בהתבסס על הנתונים הבאים. השב רק בסיכום המרגש. הנתונים: \n\n${greetingData}`;
-
-            const payload = { contents: [{ parts: [{ text: userQuery }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
-
-            try {
-                const result = await fetchAI(apiUrl, payload);
-                const summaryText = result.candidates?.[0]?.content?.parts?.[0]?.text || "לא ניתן היה ליצור סיכום אישי. נסה שוב.";
-                outputElement.innerHTML = `<p class="text-green-700 font-bold whitespace-pre-line">${summaryText}</p>`;
-                showModal('הצלחה!', 'הסיכום האישי לינאי הושלם!');
-            } catch (e) {
-                outputElement.innerHTML = `<p class="text-red-500">${e.message}</p>`;
-                showModal('שגיאה', `שגיאה ביצירת הסיכום האישי: ${e.message}`);
-            }
-            setButtonLoading('yanai-summary-button', false, 'לחץ כאן כדי לחשוף את סיכום ה-AI האמוציונלי המיוחד!');
-        }
-        window.generateYanaiSpecialSummary = generateYanaiSpecialSummary;
-        
-        // --- END AI GENERATION LOGIC ---
-
-        // --- GREETING SUBMISSION LOGIC (Remains the same) ---
-        
-        document.getElementById('greeting-form').addEventListener('submit', handleGreetingSubmit);
-        
-        let selectedFiles = []; // Array to store file objects
+        // --- GREETING SUBMISSION LOGIC ---
+        let selectedFiles = []; // Array of File objects
+        let uploadedAudioUrl = null;
 
         function handleFileSelection(input) {
-            const files = Array.from(input.files);
-            if (files.length > 3) {
-                selectedFiles = files.slice(0, 3);
-                showModal('שימו לב', "ניתן לבחור עד 3 קבצים בלבד. נבחרו רק שלושת הקבצים הראשונים.");
-            } else {
-                selectedFiles = files;
+            selectedFiles = [];
+            if (input.files.length > 3) {
+                showModal('יותר מדי קבצים', 'ניתן לצרף עד 3 קבצים בלבד.', 'red');
+                input.value = ''; // Clear the input
+                updateFileCount();
+                return;
             }
-            updateFileCountDisplay();
+            selectedFiles = Array.from(input.files);
+            updateFileCount();
         }
-        
-        function fileToBase64(file) {
-             return new Promise(resolve => {
-                const reader = new FileReader();
-                reader.onload = () => resolve({ data: reader.result.split(',')[1], mimeType: file.type, name: file.name });
-                reader.readAsDataURL(file);
-            });
-        }
-        
-        // Simple recording stubs for UI functionality
-        const recordButton = document.getElementById('record-button');
-        const stopButton = document.getElementById('stop-button');
-        const audioPreview = document.getElementById('audio-preview');
+        window.handleFileSelection = handleFileSelection;
 
-        if(recordButton) recordButton.onclick = () => { isRecording = true; recordButton.disabled = true; stopButton.disabled = false; recordButton.innerText = 'מקליט...'; };
-        if(stopButton) stopButton.onclick = () => { isRecording = false; recordedBlob = new Blob(['dummy audio data'], { type: 'audio/wav' }); audioPreview.src = URL.createObjectURL(recordedBlob); audioPreview.classList.remove('hidden'); recordButton.disabled = false; stopButton.disabled = true; recordButton.innerText = 'התחל הקלטה'; updateFileCountDisplay(); };
-
-
-        function updateFileCountDisplay() {
+        function updateFileCount() {
             const fileCount = selectedFiles.length;
             const audioCount = recordedBlob ? 1 : 0;
-            document.getElementById('file-count').innerText = `${fileCount} קבצים ו-${audioCount} הקלטות מוכנים לשליחה.`;
+            let message = `${fileCount} קבצים ו-${audioCount} הקלטות מוכנים לשליחה.`;
+            if (isRecording) {
+                 message = `מקליט... שניות: ${(new Date() - isRecording) / 1000}`;
+            }
+            document.getElementById('file-count').innerText = message;
         }
 
-        async function handleGreetingSubmit(e) {
-            e.preventDefault();
+        async function uploadFile(file) {
+            const storage = window.getStorage();
+            const fileId = `${window.userId}-${Date.now()}-${file.name}`;
+            const fileRef = window.storageRef(storage, window.getStoragePath(fileId));
+            
+            await window.uploadBytes(fileRef, file);
+            return window.getDownloadURL(fileRef);
+        }
+
+        async function submitGreeting(event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const name = document.getElementById('greeter-name').value.trim();
+            const text = document.getElementById('greeting-text').value.trim();
             const submitButton = document.getElementById('submit-greeting');
-            submitButton.disabled = true;
-            submitButton.innerText = 'מנתח טון ושולח ברכה...';
+            const defaultButtonText = 'שלח את הברכה המיוחדת';
 
-            const greeterName = document.getElementById('greeter-name').value;
-            const greetingText = document.getElementById('greeting-text').value;
-
-            if (!greeterName || !greetingText) {
-                showModal('שגיאה', 'אנא מלא שם וברכה.');
-                submitButton.disabled = false;
-                submitButton.innerText = 'שלח את הברכה המיוחדת';
+            if (!name || !text) {
+                showModal('שדות חובה', 'אנא מלא את השם והברכה.', 'red');
                 return;
+            }
+
+            setButtonLoading('submit-greeting', true, defaultButtonText);
+
+            try {
+                // 1. Analyze Tone (non-blocking)
+                const tone = await analyzeTone(text);
+
+                // 2. Upload files (blocking)
+                const fileUrls = [];
+                for (const file of selectedFiles) {
+                    const url = await uploadFile(file);
+                    fileUrls.push({ url, type: file.type, name: file.name });
+                }
+
+                // 3. Upload recorded audio (blocking)
+                if (recordedBlob) {
+                    const audioFile = new File([recordedBlob], `audio_${Date.now()}.webm`, { type: recordedBlob.type });
+                    const audioUrl = await uploadFile(audioFile);
+                    fileUrls.push({ url: audioUrl, type: recordedBlob.type, name: 'הקלטת קול' });
+                }
+
+                // 4. Save to Firestore
+                const newGreeting = {
+                    name: name,
+                    text: text,
+                    files: fileUrls,
+                    tone: tone, 
+                    userId: window.userId,
+                    timestamp: window.serverTimestamp(),
+                    likes: [], // Store user IDs who liked it
+                    likesCount: 0,
+                    replies: []
+                };
+
+                await window.addDoc(window.getGreetingsCollectionRef(), newGreeting);
+
+                // 5. Success
+                showModal('הצלחה!', 'הברכה נשלחה בהצלחה לינאי!', 'green');
+                form.reset();
+                selectedFiles = [];
+                recordedBlob = null;
+                document.getElementById('audio-preview').classList.add('hidden');
+                updateFileCount();
+
+            } catch (e) {
+                console.error("Submission failed:", e);
+                showModal('שגיאת שליחה', `שגיאה בשליחת הברכה או העלאת הקבצים: ${e.message}`, 'red');
+            } finally {
+                setButtonLoading('submit-greeting', false, defaultButtonText);
+            }
+        }
+        window.submitGreeting = submitGreeting;
+        
+        // --- RECORDING LOGIC ---
+        function startRecording() {
+            if (isRecording) return;
+
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    recorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    recordedBlob = null;
+                    isRecording = new Date(); 
+
+                    recorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+
+                    recorder.onstop = () => {
+                        recordedBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        const audioUrl = URL.createObjectURL(recordedBlob);
+                        const audioPreview = document.getElementById('audio-preview');
+                        audioPreview.src = audioUrl;
+                        audioPreview.classList.remove('hidden');
+                        isRecording = false;
+                        
+                        document.getElementById('record-button').disabled = false;
+                        document.getElementById('stop-button').disabled = true;
+                        document.getElementById('record-button').innerText = 'התחל הקלטה מחדש';
+                        
+                        // Stop stream tracks
+                        stream.getTracks().forEach(track => track.stop());
+                        updateFileCount();
+                    };
+
+                    recorder.start();
+                    
+                    document.getElementById('record-button').disabled = true;
+                    document.getElementById('stop-button').disabled = false;
+                    document.getElementById('record-button').innerText = 'מקליט...';
+                    
+                    updateFileCount();
+
+                    // Auto stop after 30 seconds
+                    setTimeout(() => {
+                        if (isRecording) {
+                            stopRecording();
+                            showModal('הקלטה אוטומטית', 'ההקלטה הופסקה אוטומטית לאחר 30 שניות.', 'green');
+                        }
+                    }, 30000);
+
+                })
+                .catch(err => {
+                    console.error('Recording failed:', err);
+                    showModal('שגיאת מיקרופון', 'לא ניתן לגשת למיקרופון. ודא הרשאות זמינות.', 'red');
+                });
+        }
+        window.startRecording = startRecording;
+
+        function stopRecording() {
+            if (recorder && recorder.state !== 'inactive') {
+                recorder.stop();
+            }
+        }
+        window.stopRecording = stopRecording;
+
+
+        // --- INTERACTION LOGIC ---
+        async function toggleLike(greetingId, likesArray) {
+            if (!window.db || !window.userId) return;
+
+            const greetingRef = window.doc(window.getGreetingsCollectionRef(), greetingId);
+            const isLiked = likesArray.includes(window.userId);
+            
+            let newLikes;
+            if (isLiked) {
+                // Remove like
+                newLikes = likesArray.filter(uid => uid !== window.userId);
+            } else {
+                // Add like
+                newLikes = [...likesArray, window.userId];
+                // Trigger ping animation only on like
+                const heart = document.getElementById(`heart-${greetingId}`);
+                if (heart) {
+                    heart.classList.add('animate-ping-once');
+                    setTimeout(() => heart.classList.remove('animate-ping-once'), 600);
+                }
             }
 
             try {
-                // *** הבהרה: ניתוח הטון מבוצע על טקסט הברכה (לצורך סינון וסיכום AI), ולא על הקובץ הקולי. לכן, הפונקציה נשארת פעילה גם ללא הקלטה. ***
-                const analyzedTone = await analyzeTone(greetingText);
-                
-                let fileData = [];
-                for (const file of selectedFiles) {
-                    fileData.push(await fileToBase64(file));
-                }
-
-                let audioData = null;
-                if (recordedBlob) {
-                    audioData = await fileToBase64(recordedBlob);
-                }
-                
-                // *** FIX: Used window.serverTimestamp here after it was exposed globally ***
-                const greeting = {
-                    greeterName,
-                    text: greetingText,
-                    files: fileData, 
-                    audio: audioData, 
-                    tone: analyzedTone, 
-                    likesCount: 0, 
-                    replies: [], 
-                    timestamp: window.serverTimestamp(),
-                    senderId: window.userId 
-                };
-
-                // Attempt to save to Firestore
-                await addDoc(window.getGreetingsCollectionRef(), greeting);
-
-                document.getElementById('greeting-form').reset();
-                selectedFiles = [];
-                recordedBlob = null;
-                audioPreview.classList.add('hidden');
-                audioPreview.src = '';
-                updateFileCountDisplay();
-
-                showModal('הצלחה!', 'הברכה נשלחה בהצלחה!');
-
-            } catch (error) {
-                console.error("שגיאה בשליחת הברכה:", error);
-                
-                // *** REFINED ERROR HANDLING FOR FIRESTORE/GENERAL SUBMISSION ***
-                let errorMessage = `שגיאה כללית בשליחה: ${error.message}`;
-                
-                // Check for 429 error specific message from fetchAI
-                if (error.message.includes('429') || error.message.includes('עמוסים כרגע')) {
-                    errorMessage = "שגיאה בשרת: בקשות מרובות מדי (429). אנא נסה שוב בעוד דקה.";
-                } 
-                // Generic check for potential Firestore/DB issues (usually network or permission)
-                else if (error.message.includes('permission') || error.message.includes('document') || error.name === 'FirebaseError') { 
-                     errorMessage = "שגיאת שמירת ברכה: ייתכן שאין לך הרשאה מתאימה, או שיש בעיית חיבור ל-Firestore. אנא רענן ונסה שוב.";
-                }
-
-                showModal('שגיאה בשמירת ברכה', errorMessage);
-            } finally {
-                submitButton.disabled = false;
-                submitButton.innerText = 'שלח את הברכה המיוחדת';
+                // Use likesCount field for sorting (client-side)
+                await window.updateDoc(greetingRef, {
+                    likes: newLikes,
+                    likesCount: newLikes.length
+                });
+            } catch (e) {
+                console.error("Error toggling like:", e);
+                showModal('שגיאה', 'שגיאה בלחיצה על "אהבתי". נסה שוב.', 'red');
             }
         }
-        
-        // --- NEW: REPLY SUBMISSION LOGIC ---
-        window.handleReplySubmit = async (greetingId) => {
-            const input = document.getElementById(`reply-input-${greetingId}`);
-            const replyText = input.value.trim();
-            const replyName = document.getElementById('greeter-name').value.trim() || 'אורח אנונימי'; // Use the main name field as sender name
+        window.toggleLike = toggleLike;
 
-            if (!replyText) {
-                showModal('שגיאה', 'אנא כתוב תגובה לפני השליחה.');
+        function toggleReplyForm(greetingId) {
+            const form = document.getElementById(`reply-form-${greetingId}`);
+            const section = document.getElementById(`reply-section-${greetingId}`);
+            
+            if (form.classList.contains('hidden')) {
+                form.classList.remove('hidden');
+                section.style.maxHeight = section.scrollHeight + "px";
+            } else {
+                section.style.maxHeight = "0";
+                setTimeout(() => form.classList.add('hidden'), 300);
+            }
+        }
+        window.toggleReplyForm = toggleReplyForm;
+
+        async function submitReply(event, greetingId) {
+            event.preventDefault();
+            
+            const form = event.target;
+            const name = form.querySelector('input[placeholder="שם המגיב"]').value.trim();
+            const text = form.querySelector('textarea').value.trim();
+
+            if (!name || !text) {
+                showModal('שדות חובה', 'אנא מלא שם ותגובה.', 'red');
                 return;
             }
+
+            const reply = {
+                name: name,
+                text: text,
+                timestamp: window.serverTimestamp(),
+                userId: window.userId 
+            };
             
-            const replyButton = document.getElementById(`reply-submit-${greetingId}`);
+            const replyButton = form.querySelector('button[type="submit"]');
+            const defaultButtonText = 'שלח תגובה';
             replyButton.disabled = true;
             replyButton.innerText = 'שולח...';
 
             try {
-                const docRef = window.doc(window.db, window.getGreetingsCollectionRef().path, greetingId);
-                
-                const newReply = {
-                    name: replyName,
-                    text: replyText,
-                    timestamp: new Date().toISOString(), // Use simple ISO string for replies inside array
-                    userId: window.userId
-                };
-
-                await window.updateDoc(docRef, {
-                    replies: window.arrayUnion(newReply) // Atomically add to array
+                const greetingRef = window.doc(window.getGreetingsCollectionRef(), greetingId);
+                await window.updateDoc(greetingRef, {
+                    replies: window.arrayUnion(reply)
                 });
 
-                input.value = '';
-                showModal('הצלחה!', 'התגובה נשלחה!');
-
-            } catch (error) {
-                console.error("Error submitting reply:", error);
-                showModal('שגיאה', 'שגיאה בשליחת התגובה.');
+                showModal('תגובה נשלחה!', 'התגובה נשלחה בהצלחה.', 'green');
+                form.reset();
+                toggleReplyForm(greetingId); // Close the form
+            } catch (e) {
+                console.error("Error submitting reply:", e);
+                showModal('שגיאת שליחה', `שגיאה בשליחת התגובה: ${e.message}`, 'red');
             } finally {
                 replyButton.disabled = false;
-                replyButton.innerText = 'שלח תגובה';
-                // Find the section element and collapse it
-                const section = document.getElementById(`reply-section-${greetingId}`);
-                if (section) section.style.maxHeight = '0'; 
+                replyButton.innerText = defaultButtonText;
+            }
+        }
+        window.submitReply = submitReply;
+
+
+        // --- RENDERING LOGIC ---
+        function formatTimestamp(timestamp) {
+            if (!timestamp || !timestamp.toDate) return 'לא ידוע';
+            const date = timestamp.toDate();
+            return date.toLocaleDateString('he-IL', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        }
+
+        function createMediaElement(file) {
+            const baseClass = "w-full rounded-lg shadow-md mt-2";
+            const isImage = file.type.startsWith('image/');
+            const isVideo = file.type.startsWith('video/');
+            const isAudio = file.type.startsWith('audio/') || file.type.includes('webm');
+
+            if (isImage) {
+                return `<img src="${file.url}" alt="${file.name}" class="${baseClass} h-40 object-cover cursor-pointer" onclick="window.open('${file.url}', '_blank')"/>`;
+            } else if (isVideo) {
+                return `<video controls src="${file.url}" class="${baseClass}" ></video>`;
+            } else if (isAudio) {
+                 return `<div class="bg-gray-100 p-2 rounded-lg mt-2 flex items-center gap-2">
+                            <span class="text-xs text-gray-500">🎧 ${file.name || 'הקלטה קולית'}</span>
+                            <audio controls src="${file.url}" class="flex-1"></audio>
+                        </div>`;
+            } else {
+                return `<a href="${file.url}" target="_blank" class="block text-sm text-indigo-500 hover:underline mt-2 p-2 bg-indigo-50 rounded-lg">📎 קובץ מצורף: ${file.name || 'לא ידוע'}</a>`;
             }
         }
         
-        // Toggle Reply Box 
-        window.toggleReplyBox = (greetingId, forceOpen = false) => {
-            const section = document.getElementById(`reply-section-${greetingId}`);
-            if (!section) return;
-
-            if (forceOpen || section.style.maxHeight === '0px' || section.style.maxHeight === '') {
-                // If opening, force the max height to scroll height for animation
-                section.style.maxHeight = section.scrollHeight + 'px';
-            } else {
-                section.style.maxHeight = '0';
-            }
-        }
-
-        // --- LIKE TOGGLE LOGIC ---
-        window.toggleLike = async (greetingId, currentLikes) => {
-            if (!window.db || !window.userId) {
-                console.error("Firestore not initialized.");
-                showModal('שגיאה', 'מערכת הנתונים לא אותחלה. אנא רענן את הדף.');
-                return;
-            }
-
-            const likeButton = document.getElementById(`like-icon-${greetingId}`);
-            const likeCountElement = document.getElementById(`like-count-${greetingId}`);
+        function renderGreetings(greetings) {
+            const listElement = document.getElementById('greetings-list');
             
-            try {
-                const docRef = window.doc(window.db, window.getGreetingsCollectionRef().path, greetingId);
-                const newLikesCount = (currentLikes || 0) + 1;
-                
-                // Optimistic update and visual feedback
-                likeCountElement.innerText = newLikesCount; 
-                likeButton.classList.add('text-red-500', 'scale-125', 'animate-ping-once');
-                
-                setTimeout(() => {
-                    likeButton.classList.remove('scale-125', 'animate-ping-once');
-                }, 500);
-
-                await window.updateDoc(docRef, {
-                    likesCount: newLikesCount
-                });
-
-            } catch (error) {
-                console.error("Error toggling like:", error);
-                // Revert optimistic update
-                likeCountElement.innerText = currentLikes;
-                likeButton.classList.remove('text-red-500');
-                showModal('שגיאה', 'לא ניתן היה לעדכן את כמות הלייקים כרגע.');
-            }
-        }
-
-
-        // --- GREETING DISPLAY LOGIC ---
-        window.renderGreetings = (greetings) => {
-            const list = document.getElementById('greetings-list');
-            list.innerHTML = ''; 
-
             if (greetings.length === 0) {
-                list.innerHTML = `<p class="text-gray-500 text-center p-4 bg-gray-100 rounded-lg">אין ברכות התואמות את הסינון הנוכחי.</p>`;
+                listElement.innerHTML = `<p class="text-gray-500 text-center text-xl p-8">טרם נשלחו ברכות. היה הראשון לברך!</p>`;
                 return;
             }
 
-            greetings.forEach(g => {
-                const greetingCard = document.createElement('div');
-                greetingCard.className = 'p-5 border-2 border-red-300 rounded-xl shadow-md bg-white space-y-3';
+            listElement.innerHTML = greetings.map(greeting => {
+                const hasLiked = greeting.likes.includes(window.userId);
+                const likeCount = greeting.likesCount || 0;
+                const likesText = likeCount > 0 ? `+${likeCount}` : '';
+                const repliesCount = greeting.replies?.length || 0;
                 
-                let fileHtml = '';
-                if (g.files && g.files.length > 0) {
-                    fileHtml = '<div class="flex flex-wrap gap-2 mt-2 border-t pt-2 border-gray-100">';
-                    g.files.forEach(file => {
-                        const mime = file.mimeType || '';
-                        const base64Url = `data:${mime};base64,${file.data}`;
-                        
-                        if (mime.startsWith('image/')) {
-                            fileHtml += `<img src="${base64Url}" alt="${file.name}" class="w-24 h-24 object-cover rounded-md shadow-sm" onerror="this.onerror=null;this.src='https://placehold.co/96x96/f0f4f8/94a3b8?text=תמונה+חסרה'">`;
-                        } else if (mime.startsWith('audio/')) {
-                            fileHtml += `
-                                <div class="p-2 border rounded-md bg-gray-50">
-                                    <p class="text-xs text-gray-500">${file.name || 'קובץ שמע'}</p>
-                                    <audio controls src="${base64Url}" class="w-full mt-1"></audio>
-                                </div>`;
-                        } else if (mime.startsWith('video/')) {
-                            fileHtml += `
-                                <video controls src="${base64Url}" class="w-32 h-32 object-cover rounded-md shadow-sm bg-black" poster="https://placehold.co/128x128/f0f4f8/94a3b8?text=וידאו" >
-                                    הדפדפן שלך לא תומך בווידאו.
-                                </video>`;
-                        } else {
-                            fileHtml += `<div class="text-xs p-2 bg-gray-100 rounded-md">קובץ מצורף: ${file.name}</div>`;
-                        }
-                    });
-                    fileHtml += '</div>';
-                }
+                // Render Media
+                const mediaHtml = (greeting.files || [])
+                    .map(file => createMediaElement(file)).join('');
 
-                // Render attached audio recording
-                let audioHtml = '';
-                if (g.audio && g.audio.data) {
-                    const audioUrl = `data:${g.audio.mimeType};base64,${g.audio.data}`;
-                    audioHtml = `
-                        <div class="mt-3 p-3 border-t border-gray-100">
-                            <p class="text-sm font-semibold text-gray-700">🎧 הקלטה קולית:</p>
-                            <audio controls src="${audioUrl}" class="w-full mt-1"></audio>
-                        </div>`;
-                }
-                
                 // Render Replies
-                let repliesHtml = '';
-                if (g.replies && g.replies.length > 0) {
-                    repliesHtml = `
-                        <div class="mt-4 pt-3 border-t border-gray-200">
-                            <p class="text-sm font-bold text-gray-700 mb-2">תגובות (${g.replies.length}):</p>
-                            <div class="space-y-2 max-h-40 overflow-y-auto pr-2" dir="rtl">
-                                ${g.replies.map(reply => `
-                                    <div class="p-2 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-                                        <div class="flex justify-between items-center text-xs text-gray-500">
-                                            <span class="font-semibold text-gray-700">${reply.name}</span>
-                                            <span>${new Date(reply.timestamp).toLocaleDateString('he-IL')}</span>
-                                        </div>
-                                        <p class="text-sm text-gray-600 mt-1">${reply.text}</p>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>`;
-                }
-
-                const timestamp = g.timestamp?.toDate ? g.timestamp.toDate().toLocaleDateString('he-IL') : 'מיד עכשיו';
-                const tone = g.tone || "לא נותח";
-                const likesCount = g.likesCount || 0; 
-
-                // Escape backticks in text for safe function call
-                const safeGreetingText = g.text.replace(/`/g, '\\`');
-
-                greetingCard.innerHTML = `
-                    <div class="flex justify-between items-center border-b pb-2 mb-2">
-                        <h4 class="text-xl font-extrabold text-red-800">${g.greeterName}</h4>
-                        <div class="flex items-center space-x-2 space-x-reverse text-right">
-                            <span class="text-sm font-semibold bg-blue-100 text-blue-800 px-3 py-1 rounded-full shadow-sm">
-                                טון: ${tone} 🤖
-                            </span>
-                            <span class="text-sm text-gray-500">${timestamp}</span>
+                const repliesHtml = (greeting.replies || [])
+                    .sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)) // Sort replies newest first
+                    .map(reply => `
+                        <div class="p-3 bg-gray-50 rounded-lg border-r-4 border-gray-300 shadow-sm text-sm">
+                            <p class="font-bold text-gray-700">${reply.name}:</p>
+                            <p class="text-gray-600 mt-1">${reply.text}</p>
+                            <p class="text-xs text-gray-400 mt-1 text-left">${formatTimestamp(reply.timestamp)}</p>
                         </div>
-                    </div>
-                    <p class="text-gray-700 whitespace-pre-line">${g.text}</p>
-                    ${fileHtml}
-                    ${audioHtml}
-                    ${repliesHtml}
-                    
-                    <!-- Control and Reply Section -->
-                    <div class="flex justify-between items-center mt-3 pt-3 border-t border-gray-100">
-                        <!-- Like Button -->
-                        <button onclick="toggleLike('${g.id}', ${likesCount})" class="text-gray-500 hover:text-red-500 transition duration-150 flex items-center gap-1">
-                            <span id="like-icon-${g.id}" class="${likesCount > 0 ? 'text-red-500' : 'text-gray-500'}">❤️</span>
-                            <span id="like-count-${g.id}" class="font-bold">${likesCount}</span>
-                            <span class="text-sm">אהבתי</span>
-                        </button>
+                    `).join('');
+
+
+                return `
+                    <div class="bg-white p-6 rounded-xl shadow-lg border border-red-100 space-y-4 relative overflow-hidden">
+                        <!-- Tone Badge -->
+                        <span class="absolute top-0 right-0 px-3 py-1 bg-red-100 text-red-800 text-sm font-semibold rounded-bl-xl shadow-md">
+                            טון: ${greeting.tone || 'לא נותח'}
+                        </span>
+
+                        <h4 class="text-2xl font-extrabold text-red-700 border-b pb-2">${greeting.name}</h4>
                         
-                        <!-- Reply Button -->
-                        <button onclick="toggleReplyBox('${g.id}')" class="text-sm px-3 py-1 bg-red-100 text-red-700 rounded-full hover:bg-red-200 transition duration-150">
-                            הגב/י
-                        </button>
-                    </div>
-                    
-                    <!-- Reply Input Section -->
-                    <div id="reply-section-${g.id}" class="reply-section max-h-0 bg-gray-50 p-3 rounded-lg border border-gray-200 mt-2">
-                        <div class="flex gap-2 mb-2">
-                            <!-- NEW AI REPLY BUTTON -->
-                            <button id="ai-reply-button-${g.id}" onclick="generateAIReply('${g.id}', '${g.greeterName}', \`${safeGreetingText}\`)" class="flex-1 text-sm px-4 py-1 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition duration-150 disabled:bg-indigo-300">
-                                🤖 צור תגובת AI
-                            </button>
-                            <button id="clear-reply-button-${g.id}" onclick="document.getElementById('reply-input-${g.id}').value=''" class="text-sm px-4 py-1 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition duration-150">
-                                נקה
-                            </button>
+                        <!-- Greeting Text -->
+                        <p class="text-gray-800 text-lg whitespace-pre-line">${greeting.text}</p>
+                        
+                        <!-- Media Container -->
+                        ${mediaHtml.length > 0 ? `<div class="grid grid-cols-1 md:grid-cols-3 gap-3">${mediaHtml}</div>` : ''}
+
+                        <!-- Footer and Actions -->
+                        <div class="flex justify-between items-center text-sm text-gray-500 pt-3 border-t border-gray-100">
+                            <p>נשלח: ${formatTimestamp(greeting.timestamp)}</p>
+                            <div class="flex items-center gap-4">
+                                <!-- Like Button -->
+                                <button onclick="toggleLike('${greeting.id}', ${JSON.stringify(greeting.likes)})" 
+                                        class="flex items-center gap-1 font-semibold transition duration-150 ${hasLiked ? 'text-red-500' : 'text-gray-400 hover:text-red-500'}">
+                                    <span id="heart-${greeting.id}" class="text-xl ${hasLiked ? '' : 'text-gray-400'}">❤️</span>
+                                    <span>${likesText}</span>
+                                </button>
+                                <!-- Reply Button -->
+                                <button onclick="toggleReplyForm('${greeting.id}')" 
+                                        class="flex items-center gap-1 text-blue-500 hover:text-blue-700 font-semibold transition duration-150">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                      <path fill-rule="evenodd" d="M18 5v8a2 2 0 01-2 2h-4.586l-2.707 2.707a1 1 0 01-1.414 0L4.586 15H4a2 2 0 01-2-2V5a2 2 0 012-2h12a2 2 0 012 2z" clip-rule="evenodd" />
+                                    </svg>
+                                    תגובה (${repliesCount})
+                                </button>
+                            </div>
                         </div>
-                        <textarea id="reply-input-${g.id}" rows="2" class="w-full p-2 border border-gray-300 rounded-md focus:ring-red-500 resize-none" placeholder="כתוב תגובה כאן..." dir="rtl"></textarea>
-                        <button id="reply-submit-${g.id}" onclick="handleReplySubmit('${g.id}')" class="mt-2 text-sm px-4 py-1 bg-red-500 text-white rounded-lg hover:bg-red-600 transition duration-150 disabled:bg-red-300">
-                            שלח תגובה
-                        </button>
+
+                        <!-- Replies and Reply Form -->
+                        <div id="reply-section-${greeting.id}" class="reply-section max-h-0 pt-4 space-y-3">
+                            ${repliesHtml}
+
+                            <!-- Reply Form (Initially Hidden) -->
+                            <form id="reply-form-${greeting.id}" onsubmit="submitReply(event, '${greeting.id}')" class="p-3 border border-blue-200 rounded-lg bg-blue-50 mt-4 hidden">
+                                <h5 class="font-bold text-blue-700 mb-2">הוסף תגובה:</h5>
+                                <input type="text" required class="w-full p-2 border border-blue-300 rounded-lg mb-2 text-sm" placeholder="שם המגיב" dir="rtl" />
+                                <textarea rows="2" required class="w-full p-2 border border-blue-300 rounded-lg mb-3 resize-none text-sm" placeholder="כתוב את תגובתך..." dir="rtl"></textarea>
+                                <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600 transition duration-150 text-sm">שלח תגובה</button>
+                            </form>
+                        </div>
                     </div>
                 `;
-                list.appendChild(greetingCard);
-            });
-        };
-
-        // Initialize sort and wish counter after the DOM is loaded
-        window.addEventListener('load', () => {
-             updateTopWishes(); 
-             // Removed button attachment from here for reliability
-        });
-    </script>
-
-    <!-- Tailwind Config for Custom Colors/Fonts -->
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                    },
-                    colors: {
-                        'primary': {
-                            500: '#ef4444', 
-                            700: '#b91c1c',
-                        },
-                    }
-                }
-            }
+            }).join('');
         }
+        window.renderGreetings = renderGreetings;
+        
+        // --- Initialization after DOM load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Setup recording buttons functionality
+            if (document.getElementById('record-button')) {
+                // Initial check for file count display
+                updateFileCount();
+            }
+        });
+
     </script>
 </body>
 </html>
