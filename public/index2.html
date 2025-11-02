@@ -84,6 +84,8 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
                 storage = getStorage(app);
+                                window.db = db; // Expose for other functions
+                window.storage = storage; // Expose storage
 
                 // Set session persistence (optional but good for maintaining auth state)
                 await setPersistence(auth, browserSessionPersistence);
