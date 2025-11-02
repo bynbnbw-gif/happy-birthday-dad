@@ -134,27 +134,40 @@
             return `artifacts/${appId}/users/${userId}/uploads/${fileId}`;
         };
 
+        // Declare a variable at a higher scope (e.g., globally or within the module scope)
+        // to hold the unsubscribe function for the greetings listener.
+        let greetingsListener = null; // Make sure this is declared accessible to loadGreetings and any unsubscribe function
+
         // --- DATA LOADING (GREETINGS) ---
         window.loadGreetings = () => {
             // ודא שהאפליקציה מוכנה לשימוש ב-Firestore
             if (!isAuthReady || !db) return;
+
+            // If a listener is already active, unsubscribe from it before starting a new one
+            if (greetingsListener) {
+                greetingsListener(); // Call the previous unsubscribe function
+                greetingsListener = null; // Clear the reference
+            }
 
             // יוצר שאילתת Firestore פשוטה
             // **הסרנו את orderBy** כדי למנוע שגיאות אינדקסים ולהסתמך על מיון ב-JavaScript
             const q = query(window.getGreetingsCollectionRef());
             
             // מאזין בזמן אמת (onSnapshot) לכל שינוי בקולקציה הציבורית
-            const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            // Assign the unsubscribe function directly to our global/module variable
+            greetingsListener = onSnapshot(q, (querySnapshot) => {
                 const greetings = [];
                 querySnapshot.forEach((document) => {
                     // הוספת הברכה עם ה-ID שלה לרשימה
                     greetings.push({ id: document.id, ...document.data() });
                 });
                 window.allGreetings = greetings; // שמירת הנתונים הגולמיים
-                window.sortAndRender(); // מיון והצגת הנתונים באמצעות פונקציה חיצונית (בדרך כלל ממיין לפי timestamp)
+                window.sortAndRender(); // מיון והצגת הנתונים באמצעות פונקציה חיצונית
                 
-                // החזרת פונקציית unsubscribe כך שניתן יהיה לעצור את ההאזנה אם צריך
-                return unsubscribe;
+                // IMPORTANT: The 'return unsubscribe;' was incorrect here.
+                // The onSnapshot function itself returns the unsubscribe function.
+                // You don't return it from within the callback that processes the snapshot.
+                // We've already captured it by assigning it to 'greetingsListener'.
 
             }, (error) => {
                 console.error("Error listening to greetings:", error);
