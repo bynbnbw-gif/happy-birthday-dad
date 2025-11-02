@@ -336,6 +336,10 @@
 
                     if (!response.ok) {
                         const errorText = await response.text();
+                        // *** MODIFIED: Specific 429 Error Message on Final Failure ***
+                        if (response.status === 429) {
+                            throw new Error("השרתים עמוסים כרגע (שגיאה 429). אנא נסה שוב בעוד דקה.");
+                        }
                         throw new Error(`API call failed: ${response.status} ${response.statusText}. Details: ${errorText.substring(0, 100)}...`);
                     }
                     
@@ -344,7 +348,8 @@
                 } catch (error) {
                     if (attempt === maxRetries) {
                         console.error(`Fetch failed after ${maxRetries} attempts:`, error);
-                        throw new Error("שגיאה בחיבור לשרת הבינה המלאכותית: " + error.message);
+                        // *** MODIFIED: General Critical Error Message after Retries ***
+                        throw new Error("שגיאה קריטית בחיבור לשרת הבינה המלאכותית לאחר ניסיונות חוזרים.");
                     }
                     // For network errors or other non-429 errors, we still apply backoff before the next attempt
                     const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
@@ -494,7 +499,8 @@
                 return tone.replace(/["'״]/g, '', 'g').split('\n')[0].trim();
             } catch (e) {
                 console.error("Tone analysis failed:", e);
-                return "שגיאת ניתוח";
+                // Return a specific value if AI analysis fails due to API/429
+                return "שגיאת ניתוח"; 
             }
         }
         
@@ -868,6 +874,7 @@
             }
 
             try {
+                // *** הבהרה: ניתוח הטון מבוצע על טקסט הברכה (לצורך סינון וסיכום AI), ולא על הקובץ הקולי. לכן, הפונקציה נשארת פעילה גם ללא הקלטה. ***
                 const analyzedTone = await analyzeTone(greetingText);
                 
                 let fileData = [];
@@ -893,6 +900,7 @@
                     senderId: window.userId 
                 };
 
+                // Attempt to save to Firestore
                 await addDoc(window.getGreetingsCollectionRef(), greeting);
 
                 document.getElementById('greeting-form').reset();
@@ -906,7 +914,20 @@
 
             } catch (error) {
                 console.error("שגיאה בשליחת הברכה:", error);
-                showModal('שגיאה בשליחה', `שגיאה בשליחת הברכה: ${error.message}.`);
+                
+                // *** REFINED ERROR HANDLING FOR FIRESTORE/GENERAL SUBMISSION ***
+                let errorMessage = `שגיאה כללית בשליחה: ${error.message}`;
+                
+                // Check for 429 error specific message from fetchAI
+                if (error.message.includes('429') || error.message.includes('עמוסים כרגע')) {
+                    errorMessage = "שגיאה בשרת: בקשות מרובות מדי (429). אנא נסה שוב בעוד דקה.";
+                } 
+                // Generic check for potential Firestore/DB issues (usually network or permission)
+                else if (error.message.includes('permission') || error.message.includes('document') || error.name === 'FirebaseError') { 
+                     errorMessage = "שגיאת שמירת ברכה: ייתכן שאין לך הרשאה מתאימה, או שיש בעיית חיבור ל-Firestore. אנא רענן ונסה שוב.";
+                }
+
+                showModal('שגיאה בשמירת ברכה', errorMessage);
             } finally {
                 submitButton.disabled = false;
                 submitButton.innerText = 'שלח את הברכה המיוחדת';
