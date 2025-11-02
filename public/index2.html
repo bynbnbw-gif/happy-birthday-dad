@@ -80,6 +80,10 @@
                     document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה: הגדרות Firebase חסרות. אנא פנה למנהל האתר.</p>`;
                     return;
                 }
+                 app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                storage = getStorage(app);
 
                 // Set session persistence (optional but good for maintaining auth state)
                 await setPersistence(auth, browserSessionPersistence);
