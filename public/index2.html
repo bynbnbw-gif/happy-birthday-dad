@@ -42,154 +42,141 @@
         }
     </style>
     
-    <!-- Firebase Imports -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, onSnapshot, collection, query, orderBy, limit, addDoc, updateDoc, serverTimestamp, arrayUnion, setLogLevel, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
-        
-        // setLogLevel('debug'); // Enable for debugging Firestore/Auth issues
+    <!-- Firebase SDK v11.6.1 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { 
+      getAuth, signInAnonymously, signInWithCustomToken,
+      onAuthStateChanged, setPersistence, browserSessionPersistence 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { 
+  getFirestore, collection, addDoc, onSnapshot, orderBy, query, serverTimestamp,
+  updateDoc, doc, arrayUnion, getDoc
+} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- GLOBAL FIREBASE VARIABLES & SETUP ---
-        // MANDATORY: Use Canvas environment globals
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-      const firebaseConfig = {
-  apiKey: "AIzaSyC9omXEhLcarv8Lfo--lAAJ-gj6tSBVP-Y",
-  authDomain: "happybirthday44-94d5d.firebaseapp.com",
-  projectId: "happybirthday44-94d5d",
-  storageBucket: "happybirthday44-94d5d.firebasestorage.app",
-  messagingSenderId: "929384929849",
-  appId: "1:929384929849:web:4298a33ad327f7c102cbe8",
-  measurementId: "G-GE22NM3JM4"
+    import { 
+      getStorage, ref as storageRef, uploadBytes, getDownloadURL 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+    // --- Firebase Configuration ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyC9omXEhLcarv8Lfo--lAAJ-gj6tSBVP-Y",
+      authDomain: "happybirthday44-94d5d.firebaseapp.com",
+      projectId: "happybirthday44-94d5d",
+      storageBucket: "happybirthday44-94d5d.firebasestorage.app",
+      messagingSenderId: "929384929849",
+      appId: "1:929384929849:web:4298a33ad327f7c102cbe8",
+      measurementId: "G-GE22NM3JM4"
+    };
+
+    // --- Global variables ---
+    const appId = 'default-app-id';
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    let app, db, auth, storage;
+    let userId = null;
+    let isAuthReady = false;
+    window.allGreetings = []; 
+
+    // --- Initialize Firebase and Auth ---
+    window.initializeFirebase = async () => {
+      try {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+        storage = getStorage(app);
+
+        // Set persistence safely
+        try {
+          await setPersistence(auth, browserSessionPersistence);
+        } catch (e) {
+          console.warn("לא ניתן להגדיר שמירת סשן:", e);
+        }
+
+        // Handle authentication
+        onAuthStateChanged(auth, async (user) => {
+          if (!user) {
+            if (initialAuthToken) {
+              await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+              await signInAnonymously(auth);
+            }
+          }
+
+          userId = auth.currentUser?.uid || "anonymous";
+          window.userId = userId;
+          isAuthReady = true;
+
+          const el = document.getElementById('user-id-display');
+          if (el) el.innerText = `מזהה משתמש: ${userId}`;
+
+          console.log("✅ התחברות הצליחה — User ID:", userId);
+          if (typeof window.loadGreetings === "function") {
+            window.loadGreetings();
+          }
+        });
+
+      } catch (error) {
+        console.error("❌ שגיאה באתחול Firebase:", error);
+        const el = document.getElementById('greetings-list');
+        if (el) el.innerHTML = `<p class="text-red-500 text-center">שגיאה קריטית באתחול: ${error.message}</p>`;
+      }
+    };
+
+    // --- Firestore References ---
+    window.getGreetingsCollectionRef = () => collection(db, "greetings");
+
+    // --- Storage Path Helper ---
+    window.getStoragePath = (fileId) => `uploads/${userId}/${fileId}`;
+     // --- נתיב אחסון לקבצים שהמשתמש מעלה ---
+window.getStoragePath = (fileId) => `uploads/${userId}/${fileId}`;
+
+// --- משתנה גלובלי להאזנה בזמן אמת ---
+let greetingsListener = null;
+
+// --- טעינת ברכות בזמן אמת ---
+window.loadGreetings = () => {
+  if (!isAuthReady || !db) return;
+
+  // ביטול מאזין קודם (אם קיים)
+  if (greetingsListener) {
+    greetingsListener(); 
+    greetingsListener = null;
+  }
+
+  // מאזין לאוסף הברכות (ממויין לפי תאריך)
+  const q = query(window.getGreetingsCollectionRef(), orderBy("timestamp", "desc"));
+
+  greetingsListener = onSnapshot(q, (querySnapshot) => {
+    const greetings = [];
+    querySnapshot.forEach((docSnap) => {
+      greetings.push({ id: docSnap.id, ...docSnap.data() });
+    });
+
+    window.allGreetings = greetings;
+    if (typeof window.sortAndRender === "function") {
+      window.sortAndRender(); // הצגת הנתונים
+    }
+
+  }, (error) => {
+    console.error("❌ שגיאה בהאזנה לברכות:", error);
+    const el = document.getElementById('greetings-list');
+    if (el) el.innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות המשותפות: ${error.message}</p>`;
+  });
 };
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        let app, db, auth, storage;
-        let userId = 'loading';
-        let isAuthReady = false;
+// --- אתחול Firebase כשנטען הדף ---
+window.onload = window.initializeFirebase;
 
-        // Global variable to hold all greetings data for sorting/AI Summary
-        window.allGreetings = []; 
-
-        // Functions exposed to the global scope
-        window.initializeFirebase = async () => {
-            try {
-                if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase config is missing. Cannot initialize Firestore/Storage.");
-                    document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה: הגדרות Firebase חסרות. אנא פנה למנהל האתר.</p>`;
-                    return;
-                }
-                 app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                storage = getStorage(app);
-                                window.db = db; // Expose for other functions
-                window.storage = storage; // Expose storage
-
-                // Set session persistence (optional but good for maintaining auth state)
-                await setPersistence(auth, browserSessionPersistence);
-
-                // --- Core Authentication Logic ---
-                const unsubscribe = onAuthStateChanged(auth, async (user) => {
-                    unsubscribe(); // Stop listening after the first state change check
-
-                    if (user) {
-                        userId = user.uid;
-                        console.log("Authenticated user ID:", userId);
-                    } else {
-                        // Sign in with custom token if available, otherwise anonymously
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                            userId = auth.currentUser.uid;
-                        } else {
-                            // Fallback to anonymous sign-in
-                            await signInAnonymously(auth);
-                            userId = auth.currentUser.uid;
-                        }
-                    }
-
-                    isAuthReady = true;
-                    window.userId = userId; // Expose for other functions
-                    document.getElementById('user-id-display').innerText = `מזהה משתמש: ${userId}`;
-                    window.loadGreetings(); // Start loading data after auth
-                });
-            } catch (error) {
-                console.error("Firebase initialization or authentication failed:", error);
-                document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה קריטית באתחול: ${error.message}</p>`;
-            }
-        };
-
-        // Function to get the correct collection path (Now pointing to the PUBLIC space for shared greetings)
-        window.getGreetingsCollectionRef = () => {
-            // הנתונים מאוחסנים בנתיב הציבורי (/public/data/) כדי להיות משותפים לכל המשתמשים
-            return collection(db, `artifacts/${appId}/public/data/yanai_greetings`);
-        };
-
-        // Function to get the storage path for file uploads (FIXED to return a proper path)
-        window.getStoragePath = (fileId) => {
-            // נתיב אחסון פרטי סטנדרטי למשתמש עבור קבצים מועלים
-            // Note: 'userId' must be defined after authentication is complete.
-            return `artifacts/${appId}/users/${userId}/uploads/${fileId}`;
-        };
-
-        // Declare a variable at a higher scope (e.g., globally or within the module scope)
-        // to hold the unsubscribe function for the greetings listener.
-        let greetingsListener = null; // Make sure this is declared accessible to loadGreetings and any unsubscribe function
-
-        // --- DATA LOADING (GREETINGS) ---
-        window.loadGreetings = () => {
-            // ודא שהאפליקציה מוכנה לשימוש ב-Firestore
-            if (!isAuthReady || !db) return;
-
-            // If a listener is already active, unsubscribe from it before starting a new one
-            if (greetingsListener) {
-                greetingsListener(); // Call the previous unsubscribe function
-                greetingsListener = null; // Clear the reference
-            }
-
-            // יוצר שאילתת Firestore פשוטה
-            // **הסרנו את orderBy** כדי למנוע שגיאות אינדקסים ולהסתמך על מיון ב-JavaScript
-            const q = query(window.getGreetingsCollectionRef());
-            
-            // מאזין בזמן אמת (onSnapshot) לכל שינוי בקולקציה הציבורית
-            // Assign the unsubscribe function directly to our global/module variable
-            greetingsListener = onSnapshot(q, (querySnapshot) => {
-                const greetings = [];
-                querySnapshot.forEach((document) => {
-                    // הוספת הברכה עם ה-ID שלה לרשימה
-                    greetings.push({ id: document.id, ...document.data() });
-                });
-                window.allGreetings = greetings; // שמירת הנתונים הגולמיים
-                window.sortAndRender(); // מיון והצגת הנתונים באמצעות פונקציה חיצונית
-                
-                // IMPORTANT: The 'return unsubscribe;' was incorrect here.
-                // The onSnapshot function itself returns the unsubscribe function.
-                // You don't return it from within the callback that processes the snapshot.
-                // We've already captured it by assigning it to 'greetingsListener'.
-
-            }, (error) => {
-                console.error("Error listening to greetings:", error);
-                // הצגת הודעת שגיאה ידידותית למשתמש
-                document.getElementById('greetings-list').innerHTML = `<p class="text-red-500 text-center">שגיאה בטעינת הברכות המשותפות: ${error.message}</p>`;
-            });
-        };
-
-
-        // Call initialization on window load
-        window.onload = window.initializeFirebase;
-
-        // Expose Firebase functions for use in the main script
-        window.updateDoc = updateDoc;
-        window.doc = doc;
-        window.arrayUnion = arrayUnion;
-        window.serverTimestamp = serverTimestamp;
-        window.addDoc = addDoc;
-        window.getDownloadURL = getDownloadURL;
-        window.uploadBytes = uploadBytes;
-        window.storageRef = storageRef;
-        window.getStorage = getStorage;
-        window.getDoc = getDoc;
+// --- חשיפת פונקציות עזר (אם נדרש בקוד ישן) ---
+window.updateDoc = updateDoc;
+window.doc = doc;
+window.arrayUnion = arrayUnion;
+window.serverTimestamp = serverTimestamp;
+window.addDoc = addDoc;
+window.getDownloadURL = getDownloadURL;
+window.uploadBytes = uploadBytes;
+window.storageRef = storageRef;
+window.getDoc = getDoc;
     </script>
 </head>
 <body class="bg-gray-50 text-gray-900 font-['Inter'] antialiased min-h-screen p-4 sm:p-8" onload="window.initializeFirebase()">
@@ -706,249 +693,219 @@
         }
         window.toggleLike = toggleLike;
 
+// --- FILE HANDLING ---
+function updateFileCount() {
+  const fileInput = document.getElementById('greeting-files');
+  const fileCount = fileInput.files.length;
+  const audioCount = recordedBlob ? 1 : 0;
 
-        // --- FILE HANDLING ---
-        function updateFileCount() {
-            const fileInput = document.getElementById('greeting-files');
-            const fileCount = fileInput.files.length;
-            const audioCount = recordedBlob ? 1 : 0;
-            
-            if (fileCount + audioCount > 3) {
-                document.getElementById('file-count').innerHTML = `<span class="text-red-700 font-bold">⚠️ יותר מדי קבצים! מותר עד 3.</span>`;
-                // Optionally disable submit
-                document.getElementById('submit-greeting').disabled = true;
-            } else {
-                document.getElementById('file-count').innerText = `${fileCount} קבצים ו-${audioCount} הקלטות מוכנים לשליחה.`;
-                document.getElementById('submit-greeting').disabled = false;
-            }
-        }
+  if (fileCount + audioCount > 3) {
+    document.getElementById('file-count').innerHTML =
+      `<span class="text-red-700 font-bold">⚠️ ניתן לצרף עד 3 קבצים בלבד.</span>`;
+    document.getElementById('submit-greeting').disabled = true;
+  } else {
+    document.getElementById('file-count').innerText =
+      `${fileCount} קבצים ו-${audioCount} הקלטות מוכנים לשליחה.`;
+    document.getElementById('submit-greeting').disabled = false;
+  }
+}
 
-        function handleFileSelection(input) {
-            // Limit files to max 3
-            if (input.files.length > 3) {
-                const dt = new DataTransfer();
-                for (let i = 0; i < 3; i++) {
-                    dt.items.add(input.files[i]);
-                }
-                input.files = dt.files;
-                showModal('שימו לב!', 'ניתן לצרף עד 3 קבצים בלבד.', 'red');
-            }
-            updateFileCount();
-        }
-        window.handleFileSelection = handleFileSelection;
+function handleFileSelection(input) {
+  if (input.files.length > 3) {
+    const dt = new DataTransfer();
+    for (let i = 0; i < 3; i++) dt.items.add(input.files[i]);
+    input.files = dt.files;
+    showModal('שימו לב!', 'ניתן לצרף עד 3 קבצים בלבד.', 'red');
+  }
+  updateFileCount();
+}
+window.handleFileSelection = handleFileSelection;
 
 
-        // --- AUDIO RECORDING LOGIC ---
+// --- AUDIO RECORDING ---
+let recorder, audioChunks = [], recordedBlob = null, isRecording = false;
 
-        async function startRecording() {
-            if (isRecording) return;
-            isRecording = true;
-            audioChunks = [];
-            recordedBlob = null;
-            document.getElementById('audio-preview').classList.add('hidden');
-            document.getElementById('record-button').innerHTML = '🔴 מקליט (עד 30 שניות)...';
-            document.getElementById('record-button').classList.add('animate-ping-once', 'bg-red-600', 'hover:bg-red-700');
-            document.getElementById('stop-button').disabled = false;
+async function startRecording() {
+  if (isRecording) return;
+  isRecording = true;
+  audioChunks = [];
+  recordedBlob = null;
+  document.getElementById('audio-preview').classList.add('hidden');
+  const recordBtn = document.getElementById('record-button');
+  recordBtn.innerHTML = '🔴 מקליט (עד 30 שניות)...';
+  recordBtn.classList.add('animate-ping-once', 'bg-red-600', 'hover:bg-red-700');
+  document.getElementById('stop-button').disabled = false;
 
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                recorder = new MediaRecorder(stream);
-                recorder.ondataavailable = e => audioChunks.push(e.data);
-                recorder.onstop = () => {
-                    const mimeType = recorder.mimeType;
-                    recordedBlob = new Blob(audioChunks, { type: mimeType });
-                    const audioUrl = URL.createObjectURL(recordedBlob);
-                    const audioPreview = document.getElementById('audio-preview');
-                    audioPreview.src = audioUrl;
-                    audioPreview.classList.remove('hidden');
-                    
-                    // Stop stream tracks
-                    stream.getTracks().forEach(track => track.stop());
-                    
-                    stopRecordingCleanup();
-                    updateFileCount();
-                };
-                
-                recorder.start();
-                // Auto-stop after 30 seconds
-                setTimeout(() => {
-                    if (recorder && recorder.state === 'recording') {
-                        stopRecording();
-                    }
-                }, 30000);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => audioChunks.push(e.data);
+    recorder.onstop = () => {
+      recordedBlob = new Blob(audioChunks, { type: recorder.mimeType });
+      const audioUrl = URL.createObjectURL(recordedBlob);
+      const audioPreview = document.getElementById('audio-preview');
+      audioPreview.src = audioUrl;
+      audioPreview.classList.remove('hidden');
+      stream.getTracks().forEach(track => track.stop());
+      stopRecordingCleanup();
+      updateFileCount();
+    };
+    recorder.start();
+    // Stop automatically after 30 seconds
+    setTimeout(() => { if (recorder?.state === 'recording') stopRecording(); }, 30000);
+  } catch (err) {
+    console.error('❌ שגיאת מיקרופון:', err);
+    showModal('שגיאת מיקרופון', 'לא ניתן לגשת למיקרופון. ודא שהרשאה ניתנה.', 'red');
+    stopRecordingCleanup();
+  }
+}
+window.startRecording = startRecording;
 
-            } catch (err) {
-                console.error('Error accessing microphone:', err);
-                stopRecordingCleanup();
-                showModal('שגיאת מיקרופון', 'לא ניתן לגשת למיקרופון. ודא שהרשאה ניתנה.', 'red');
-            }
-        }
-        window.startRecording = startRecording;
+function stopRecordingCleanup() {
+  isRecording = false;
+  const recordBtn = document.getElementById('record-button');
+  recordBtn.innerHTML = '🎙️ התחל הקלטה';
+  recordBtn.classList.remove('animate-ping-once', 'bg-red-600', 'hover:bg-red-700');
+  document.getElementById('stop-button').disabled = true;
+}
 
-        function stopRecordingCleanup() {
-            isRecording = false;
-            document.getElementById('record-button').innerHTML = 'התחל הקלטה';
-            document.getElementById('record-button').classList.remove('animate-ping-once', 'bg-red-600', 'hover:bg-red-700');
-            document.getElementById('stop-button').disabled = true;
-        }
-
-        function stopRecording() {
-            if (recorder && recorder.state === 'recording') {
-                recorder.stop();
-            } else {
-                stopRecordingCleanup();
-            }
-        }
-        window.stopRecording = stopRecording;
+function stopRecording() {
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  else stopRecordingCleanup();
+}
+window.stopRecording = stopRecording;
 
 
-        // --- SUBMISSION LOGIC ---
-
-       // --- SUBMISSION LOGIC ---
-
+// --- FILE UPLOADS ---
 async function uploadFile(file) {
-    try {
-        const fileExtension = file.name.split('.').pop();
-        const fileName = `${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
-        const storage = window.getStorage();
-        const fileRef = window.storageRef(storage, window.getStoragePath(fileName));
-
-        await window.uploadBytes(fileRef, file);
-        return await window.getDownloadURL(fileRef);
-    } catch (e) {
-        console.error("❌ שגיאה בהעלאת קובץ:", e);
-        throw new Error("העלאת הקובץ נכשלה");
-    }
+  try {
+    const fileExtension = file.name.split('.').pop();
+    const fileName = `${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
+    const fileRef = storageRef(storage, window.getStoragePath(fileName));
+    await uploadBytes(fileRef, file);
+    return await getDownloadURL(fileRef);
+  } catch (e) {
+    console.error("❌ שגיאה בהעלאת קובץ:", e);
+    throw new Error("העלאת הקובץ נכשלה");
+  }
 }
 
 async function uploadAudio() {
-    if (!recordedBlob) return null;
-    try {
-        const fileName = `${Date.now()}-${crypto.randomUUID()}.webm`;
-        const storage = window.getStorage();
-        const fileRef = window.storageRef(storage, window.getStoragePath(fileName));
-
-        await window.uploadBytes(fileRef, recordedBlob);
-        return await window.getDownloadURL(fileRef);
-    } catch (e) {
-        console.error("❌ שגיאה בהעלאת אודיו:", e);
-        throw new Error("העלאת האודיו נכשלה");
-    }
+  if (!recordedBlob) return null;
+  try {
+    const fileName = `${Date.now()}-${crypto.randomUUID()}.webm`;
+    const fileRef = storageRef(storage, window.getStoragePath(fileName));
+    await uploadBytes(fileRef, recordedBlob);
+    return await getDownloadURL(fileRef);
+  } catch (e) {
+    console.error("❌ שגיאה בהעלאת אודיו:", e);
+    throw new Error("העלאת האודיו נכשלה");
+  }
 }
 
+window.uploadFile = uploadFile;
+window.uploadAudio = uploadAudio;
+
+
+// --- CLASSIFY TONE ---
 async function classifyTone(text) {
-    const systemPrompt = "אתה מנתח טקסט עברי שכותב את הטון הרגשי של הודעה קצרה (עד 3 מילים) ואז מסכם את תמצית המסר במשפט אחד. החזר תגובת JSON בלבד. הטונים האפשריים: 'אהבה', 'הומור', 'התרגשות', 'געגוע', 'הערכה'.";
-    const userQuery = `נתח את הטקסט הבא: "${text}"`;
+  const systemPrompt =
+    "אתה מנתח טקסט עברי שכותב את הטון הרגשי של הודעה קצרה (עד 3 מילים) ואז מסכם את תמצית המסר במשפט אחד. החזר תגובת JSON בלבד. הטונים האפשריים: 'אהבה', 'הומור', 'התרגשות', 'געגוע', 'הערכה'.";
 
-    const payload = {
-        contents: [{ parts: [{ text: userQuery }] }],
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: "OBJECT",
-                properties: {
-                    "tone": { "type": "STRING", "description": "הטון הרגשי הראשי" },
-                    "summary": { "type": "STRING", "description": "סיכום המסר במשפט אחד" }
-                },
-                "propertyOrdering": ["tone", "summary"]
-            }
-        }
-    };
+  const userQuery = `נתח את הטקסט הבא: "${text}"`;
 
-    try {
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
-        const result = await fetchAI(apiUrl, payload);
-        const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        return JSON.parse(jsonText);
-    } catch (e) {
-        console.error("AI response parsing failed, using default tone.", e);
-        return { tone: 'כללי', summary: 'ברכה מרגשת' };
-    }
+  const payload = {
+    contents: [{ parts: [{ text: userQuery }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          tone: { type: "STRING", description: "הטון הרגשי הראשי" },
+          summary: { type: "STRING", description: "סיכום המסר במשפט אחד" },
+        },
+        propertyOrdering: ["tone", "summary"],
+      },
+    },
+  };
+
+  try {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
+    const result = await fetchAI(apiUrl, payload);
+    const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    return JSON.parse(jsonText);
+  } catch (e) {
+    console.error("AI response parsing failed, using default tone.", e);
+    return { tone: "כללי", summary: "ברכה מרגשת" };
+  }
 }
 
+// --- SUBMIT GREETING ---
 async function submitGreeting(event) {
-    event.preventDefault();
-    setButtonLoading('submit-greeting', true, 'שלח את הברכה המיוחדת');
+  event.preventDefault();
+  setButtonLoading("submit-greeting", true, "שלח את הברכה המיוחדת");
 
-    const name = document.getElementById('greeter-name').value.trim();
-    const text = document.getElementById('greeting-text').value.trim();
-    const fileInput = document.getElementById('greeting-files');
-    const files = fileInput.files;
+  const name = document.getElementById("greeter-name").value.trim();
+  const text = document.getElementById("greeting-text").value.trim();
+  const fileInput = document.getElementById("greeting-files");
+  const files = fileInput.files;
 
-    if (!text) {
-        showModal('שגיאה', 'אנא כתוב ברכה לפני השליחה.', 'error');
-        setButtonLoading('submit-greeting', false, 'שלח את הברכה המיוחדת');
-        return;
+  if (!text) {
+    showModal("שגיאה", "אנא כתוב ברכה לפני השליחה.", "error");
+    setButtonLoading("submit-greeting", false, "שלח את הברכה המיוחדת");
+    return;
+  }
+
+  try {
+    // Step 1: Upload files
+    const fileUrls = [];
+    for (const file of files) {
+      fileUrls.push(await uploadFile(file));
     }
 
-    try {
-        // Step 1: Upload files
-        const fileUrls = [];
-        for (const file of files) {
-            const url = await uploadFile(file);
-            fileUrls.push(url);
-        }
+    // Step 2: Upload audio (אם קיים)
+    const audioUrl = recordedBlob ? await uploadAudio() : null;
 
-        // Step 2: Upload audio if exists
-        const audioUrl = recordedBlob ? (await uploadAudio()) : null;
+    // Step 3: קביעת טון
+    const toneResponse = await classifyTone(text);
 
-        // Step 3: Classify tone
-        const toneResponse = await classifyTone(text);
+    // Step 4: שמירה ב־Firestore באוסף משותף
+    const greetingsRef = collection(window.db, "greetings");
+    await addDoc(greetingsRef, {
+      greeterName: name || "אנונימי",
+      text,
+      files: fileUrls,
+      audioUrl,
+      userId: window.userId || null,
+      timestamp: serverTimestamp(),
+      likes: [],
+      likesCount: 0,
+      tone: toneResponse.tone || "כללי",
+      summary: toneResponse.summary || "",
+    });
 
-        // Step 4: Save greeting to Firestore (shared collection)
-        // --- FIREBASE REFERENCES ---
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const storage = getStorage(app);
+    // Step 5: איפוס והודעה למשתמש
+    document.getElementById("greeting-form").reset();
+    fileInput.value = "";
+    recordedBlob = null;
+    document.getElementById("audio-preview").classList.add("hidden");
+    updateFileCount();
 
-// --- SUBMISSION LOGIC ---
-async function submitGreeting(event) {
-    event.preventDefault();
-    setButtonLoading('submit-greeting', true, 'שלח את הברכה המיוחדת');
+    showModal(
+      "הברכה נשלחה בהצלחה! 🎉",
+      "תודה ששיתפת את הברכה המרגשת שלך 💖",
+      "green"
+    );
+  } catch (e) {
+    console.error("❌ שגיאה בשליחת ברכה:", e);
+    showModal("שגיאה בשליחה", `הברכה לא נשלחה: ${e.message}`, "error");
+  } finally {
+    setButtonLoading("submit-greeting", false, "שלח את הברכה המיוחדת");
+  }
+}
 
-    const name = document.getElementById('greeter-name').value;
-    const text = document.getElementById('greeting-text').value;
-    const fileInput = document.getElementById('greeting-files');
-    const files = fileInput.files;
-
-    try {
-        // Step 1: Upload files
-        const fileUrls = [];
-        for (const file of files) {
-            const fileExtension = file.name.split('.').pop();
-            const fileName = `${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
-            const fileRef = storageRef(storage, `greetings/${fileName}`);
-            await uploadBytes(fileRef, file);
-            fileUrls.push(await getDownloadURL(fileRef));
-        }
-
-        // Step 2: Upload audio
-        let audioUrl = null;
-        if (recordedBlob) {
-            const audioName = `${Date.now()}-${crypto.randomUUID()}.webm`;
-            const audioRef = storageRef(storage, `greetings/${audioName}`);
-            await uploadBytes(audioRef, recordedBlob);
-            audioUrl = await getDownloadURL(audioRef);
-        }
-
-        // Step 3: Classify tone using LLM
-        const toneResponse = await classifyTone(text);
-
-        // Step 4: Save greeting to Firestore (shared collection)
-        const greetingsRef = collection(db, "greetings");
-        await addDoc(greetingsRef, {
-            greeterName: name || "אנונימי",
-            text,
-            files: fileUrls,
-            audioUrl,
-            userId: window.userId || null,
-            timestamp: serverTimestamp(),
-            likes: [],
-            likesCount: 0,
-            tone: toneResponse.tone || 'כללי',
-            summary: toneResponse.summary || ''
-        });
+window.submitGreeting = submitGreeting;
 
         // Step 5: Reset and feedback
         document.getElementById('greeting-form').reset();
@@ -969,34 +926,68 @@ async function submitGreeting(event) {
 window.submitGreeting = submitGreeting;
 
 // --- DISPLAY GREETINGS IN REAL TIME ---
-(function listenToGreetings() {
-    try {
-        const greetingsRef = collection(db, "greetings");
-        const q = query(greetingsRef, orderBy("timestamp", "desc"));
+// --- DISPLAY GREETINGS IN REAL TIME ---
+function listenToGreetings() {
+  try {
+    const greetingsRef = collection(window.db, "greetings");
+    const q = query(greetingsRef, orderBy("timestamp", "desc"));
 
-        onSnapshot(q, (snapshot) => {
-            const container = document.getElementById('greetings-feed');
-            container.innerHTML = '';
+    onSnapshot(
+      q,
+      (snapshot) => {
+        const container = document.getElementById("greetings-list");
+        if (!container) {
+          console.error("❌ אלמנט greetings-list לא נמצא ב־HTML");
+          return;
+        }
 
-            snapshot.forEach((doc) => {
-                const data = doc.data();
-                const card = document.createElement('div');
-                card.className = 'greeting-card';
-                card.innerHTML = `
-                    <h3>${data.greeterName || 'אנונימי'}</h3>
-                    <p>${data.text}</p>
-                    ${data.files?.length ? `<div>${data.files.map(f => `<a href="${f}" target="_blank">📎 קובץ</a>`).join(' ')}</div>` : ''}
-                    ${data.audioUrl ? `<audio controls src="${data.audioUrl}"></audio>` : ''}
-                    <small>${data.tone ? `🎭 טון: ${data.tone}` : ''}</small>
-                    <hr>
-                `;
-                container.appendChild(card);
-            });
+        container.innerHTML = "";
+
+        if (snapshot.empty) {
+          container.innerHTML = `<p class="text-gray-500 text-center">עדיין לא נשלחו ברכות. היה הראשון!</p>`;
+          return;
+        }
+
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          const card = document.createElement("div");
+          card.className =
+            "greeting-card bg-white border border-red-200 rounded-lg p-4 mb-3 shadow-sm";
+
+          card.innerHTML = `
+            <h3 class="text-lg font-bold text-red-700">${data.greeterName || "אנונימי"}</h3>
+            <p class="text-gray-800 whitespace-pre-line mt-2">${data.text}</p>
+            ${data.files?.length
+              ? `<div class="mt-2 space-x-2">${data.files
+                  .map(
+                    (f) =>
+                      `<a href="${f}" target="_blank" class="text-blue-600 underline">📎 קובץ</a>`
+                  )
+                  .join(" ")}</div>`
+              : ""}
+            ${data.audioUrl ? `<audio controls src="${data.audioUrl}" class="mt-2 w-full"></audio>` : ""}
+            ${data.tone
+              ? `<small class="block mt-1 text-sm text-yellow-700">🎭 טון: ${data.tone}</small>`
+              : ""}
+            <hr class="mt-3 border-red-200">
+          `;
+
+          container.appendChild(card);
         });
-    } catch (err) {
-        console.error("❌ שגיאה בהאזנה לברכות:", err);
-    }
-})();
+      },
+      (error) => {
+        console.error("❌ שגיאה בהאזנה לברכות:", error);
+        document.getElementById("greetings-list").innerHTML = `
+          <p class="text-red-500 text-center">שגיאה בטעינת הברכות: ${error.message}</p>`;
+      }
+    );
+  } catch (err) {
+    console.error("❌ שגיאה כוללת בהאזנה לברכות:", err);
+  }
+}
+
+// הפעלה אחרי שה־Firebase מוכן
+window.listenToGreetings = listenToGreetings;
 
 
         // --- AI FEATURES STUBS (Need implementation for full functionality) ---
@@ -1032,149 +1023,166 @@ window.submitGreeting = submitGreeting;
             }
         }
         
-        async function generateDreamImage() {
-            setButtonLoading('dream-button', true, 'צור תמונת חלום');
-            const prompt = document.getElementById('dream-prompt').value.trim();
-            const outputEl = document.getElementById('dream-output');
-            outputEl.innerHTML = `<span class="text-indigo-600 animate-pulse">מייצר תמונה ייחודית... זה לוקח כ-30 שניות.</span>`;
+      async function generateDreamImage() {
+    setButtonLoading('dream-button', true, 'צור תמונת חלום');
+    const prompt = document.getElementById('dream-prompt').value.trim();
+    const outputEl = document.getElementById('dream-output');
+    outputEl.innerHTML = `<span class="text-indigo-600 animate-pulse">מייצר תמונה ייחודית... זה עשוי לקחת חצי דקה ⏳</span>`;
 
-            if (!prompt) {
-                outputEl.innerHTML = `<p class="text-red-500">אנא הכנס תיאור של זיכרון או חלום.</p>`;
-                setButtonLoading('dream-button', false, 'צור תמונת חלום');
-                return;
-            }
+    if (!prompt) {
+        outputEl.innerHTML = `<p class="text-red-500">אנא הכנס תיאור של חלום או זיכרון.</p>`;
+        setButtonLoading('dream-button', false, 'צור תמונת חלום');
+        return;
+    }
 
-            try {
-                const userPrompt = `A cinematic, high-quality, dreamlike, digital art image depicting: ${prompt} (Israeli style, family focused, positive emotion).`;
-                
-                const payload = { 
-                    instances: [{ prompt: userPrompt }], 
-                    parameters: { "sampleCount": 1 } 
-                };
-                
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL_PREDICT}`;
-                const result = await fetchAI(apiUrl, payload);
+    try {
+        const model = window.IMAGE_MODEL_PREDICT || "imagen-3.0"; // גיבוי
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict`;
 
-                const base64Data = result.predictions?.[0]?.bytesBase64Encoded;
-                
-                if (base64Data) {
-                    const imageUrl = `data:image/png;base64,${base64Data}`;
-                    outputEl.innerHTML = `<img src="${imageUrl}" class="w-full h-auto rounded-lg shadow-xl" alt="Generated Dream Image" />`;
-                } else {
-                    throw new Error("לא התקבלה תמונה מהשרת.");
-                }
+        const payload = { 
+            instances: [{ prompt: `A cinematic, dreamlike image depicting: ${prompt}.` }],
+            parameters: { sampleCount: 1 }
+        };
 
-            } catch (error) {
-                console.error("Image generation failed:", error);
-                outputEl.innerHTML = `<p class="text-red-500">שגיאה ביצירת התמונה: ${error.message}</p>`;
-                showModal('שגיאה', 'יצירת התמונה נכשלה. נסה שוב מאוחר יותר.', 'red');
-            } finally {
-                setButtonLoading('dream-button', false, 'צור תמונת חלום');
-            }
+        const result = await fetchAI(apiUrl, payload);
+        const base64Data = result?.predictions?.[0]?.bytesBase64Encoded;
+
+        if (base64Data) {
+            const imageUrl = `data:image/png;base64,${base64Data}`;
+            outputEl.innerHTML = `<img src="${imageUrl}" class="w-full h-auto rounded-lg shadow-xl" alt="Generated Dream Image" />`;
+        } else {
+            throw new Error("לא התקבלה תמונה מהשרת.");
         }
-        window.generateDreamImage = generateDreamImage;
 
-        async function generateProphecy() {
-            setButtonLoading('prophecy-button', true, 'טוען נבואה...');
-            const outputEl = document.getElementById('prophecy-output');
-            outputEl.innerHTML = `<span class="text-purple-600 animate-pulse">מחשב את העתיד...</span>`;
+    } catch (error) {
+        console.error("❌ Image generation failed:", error);
+        outputEl.innerHTML = `<p class="text-red-500">שגיאה ביצירת התמונה: ${error.message}</p>`;
+        showModal('שגיאה', 'יצירת התמונה נכשלה. נסה שוב מאוחר יותר.', 'red');
+    } finally {
+        setButtonLoading('dream-button', false, 'צור תמונת חלום');
+    }
+}
+window.generateDreamImage = generateDreamImage;
 
-            const systemPrompt = "אתה נביא עתיד חכם, אוהב, ומלא הומור. כתוב נבואה מרגשת ומצחיקה לינאי, שחוגג יום הולדת 44. הנבואה צריכה להתייחס לחגיגות יום הולדתו ה-60, ולהתמקד בהצלחה משפחתית, מקצועית ואישית (טיולים, תחביבים). השתמש בטון שמח ומוגזם מעט, בעברית איכותית.";
-            const userQuery = "כתוב נבואה לינאי ליום הולדת 60 שלו.";
-            
-            try {
-                const payload = {
-                    contents: [{ parts: [{ text: userQuery }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    tools: [{ "google_search": {} }] // Use search for grounding
-                };
-                
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
-                const result = await fetchAI(apiUrl, payload);
-                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "נבואה לא נמצאה. ינאי, אתה עדיין חי, וזה נצחון!";
-                
-                outputEl.innerHTML = `<p class="text-purple-800 whitespace-pre-line">${text}</p>`;
-                showModal('הנבואה נחשפה!', '🎉 העתיד ורוד ומלא כדורגל!', 'purple');
-            } catch (error) {
-                console.error("Prophecy generation failed:", error);
-                outputEl.innerHTML = `<p class="text-red-500">שגיאה בחישוב הנבואה: ${error.message}</p>`;
-            } finally {
-                setButtonLoading('prophecy-button', false, 'חשוף את הנבואה');
-            }
-        }
-        window.generateProphecy = generateProphecy;
         
-        async function generateSong() {
-            setButtonLoading('song-button', true, 'יוצר שיר...');
-            const prompt = document.getElementById('song-prompt').value.trim();
-            const outputEl = document.getElementById('song-output');
-            outputEl.innerHTML = `<span class="text-pink-600 animate-pulse">מעבד מילים וצלילים...</span>`;
+ async function generateProphecy() {
+    const outputEl = document.getElementById('prophecy-output');
+    if (!outputEl) return;
+    
+    setButtonLoading('prophecy-button', true, 'טוען נבואה...');
+    outputEl.innerHTML = `<span class="text-purple-600 animate-pulse">מחשב את העתיד...</span>`;
 
-            const userPrompt = `כתוב שיר יום הולדת קצר (עד 4 בתים) ומחורז לינאי. התאם את השיר לנושא: "${prompt || 'אבא שלנו'}", והדגש את אהבתו למשפחתו ולחיים, בעברית קלילה ומחויכת.`;
-            const systemPrompt = "אתה משורר עברי מוכשר ומשעשע. החזר את השיר בפורמט נקי, ללא כותרות או סיכומים, רק את בתי השיר עם שורות מופרדות באופן ברור.";
-            
-            try {
-                const payload = {
-                    contents: [{ parts: [{ text: userPrompt }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                };
-                
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
-                const result = await fetchAI(apiUrl, payload);
-                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "שיר לא נמצא. במקום זאת, מזל טוב!";
-                
-                outputEl.innerHTML = `<p class="text-pink-800 whitespace-pre-line">${text}</p>`;
-                showModal('השיר הושלם!', '🎶 שיר חדש לינאי!', 'pink');
-            } catch (error) {
-                console.error("Song generation failed:", error);
-                outputEl.innerHTML = `<p class="text-red-500">שגיאה ביצירת השיר: ${error.message}</p>`;
-            } finally {
-                setButtonLoading('song-button', false, 'צור את השיר');
-            }
-        }
-        window.generateSong = generateSong;
-        
-        // --- FACT GENERATION (using Google Search grounding) ---
-        const FACTS_QUERIES = [
-            "עובדה היסטורית מעניינת על שנת 1981", 
-            "עובדה על גיל 44 במונחים פסיכולוגיים או היסטוריים",
-            "מה היו חדשות פופולריות ביום ההולדת של ינאי 1981", 
-            "עובדה משעשעת על גיל 44 או שנת 1981", 
-            "נתון טריוויה מדהים על ספורט או מדע בשנת 1981"
-        ];
-        
-        async function showNextFact() {
-            setButtonLoading('fact-button', true, 'טוען עובדה...');
-            const outputEl = document.getElementById('fact-output');
-            outputEl.innerHTML = `<span class="text-green-600 animate-pulse">מחפש מידע עדכני...</span>`;
+    const systemPrompt = "אתה נביא עתיד חכם, אוהב ומלא הומור...";
+    const userQuery = "כתוב נבואה לינאי ליום הולדת 60 שלו.";
 
-            const queryIndex = factIndex % FACTS_QUERIES.length;
-            const userQuery = FACTS_QUERIES[queryIndex];
-            factIndex++; 
-            
-            const systemPrompt = "אתה היסטוריון ואיש טריוויה. כתוב עובדה אחת, קצרה ומעניינת, בעברית קולחת, בהתבסס על המידע העדכני ביותר שתמצא. אל תכלול כותרות או ציטוטים, רק את העובדה עצמה.";
-            
-            try {
-                const payload = {
-                    contents: [{ parts: [{ text: userQuery }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    tools: [{ "google_search": {} }] // Use search for grounding
-                };
-                
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent`;
-                const result = await fetchAI(apiUrl, payload);
-                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "לא נמצאה עובדה מרתקת הפעם.";
-                
-                outputEl.innerHTML = `<p class="text-green-800 whitespace-pre-line">${text}</p>`;
-                
-            } catch (error) {
-                console.error("Fact generation failed:", error);
-                outputEl.innerHTML = `<p class="text-red-500">שגיאה בטעינת עובדה: ${error.message}</p>`;
-            } finally {
-                setButtonLoading('fact-button', false, 'עובדה הבאה!');
-            }
-        }
-        window.showNextFact = showNextFact;
+    try {
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${window.TEXT_MODEL || "gemini-2.0-pro"}:generateContent`;
+        const payload = {
+            contents: [{ parts: [{ text: userQuery }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] }
+        };
+
+        const result = await fetchAI(apiUrl, payload);
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "נבואה לא נמצאה.";
+        outputEl.innerHTML = `<p class="text-purple-800 whitespace-pre-line">${text}</p>`;
+        showModal('הנבואה נחשפה!', '🎉 העתיד ורוד ומלא שמחה!', 'purple');
+    } catch (error) {
+        console.error("❌ Prophecy generation failed:", error);
+        outputEl.innerHTML = `<p class="text-red-500">שגיאה בחישוב הנבואה: ${error.message}</p>`;
+    } finally {
+        setButtonLoading('prophecy-button', false, 'חשוף את הנבואה');
+    }
+}
+window.generateProphecy = generateProphecy;
+
+
+async function generateSong() {
+    const outputEl = document.getElementById('song-output');
+    if (!outputEl) return;
+
+    setButtonLoading('song-button', true, 'יוצר שיר...');
+    const prompt = document.getElementById('song-prompt').value.trim();
+
+    outputEl.innerHTML = `<span class="text-pink-600 animate-pulse">מעבד מילים וצלילים...</span>`;
+
+    const userPrompt = `כתוב שיר יום הולדת קצר ומחורז לינאי בנושא "${prompt || 'אבא שלנו'}"...`;
+    const systemPrompt = "אתה משורר עברי מוכשר ומשעשע...";
+
+    try {
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${window.TEXT_MODEL || "gemini-2.0-pro"}:generateContent`;
+        const payload = {
+            contents: [{ parts: [{ text: userPrompt }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] }
+        };
+
+        const result = await fetchAI(apiUrl, payload);
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "שיר לא נמצא. מזל טוב בכל מקרה!";
+        outputEl.innerHTML = `<p class="text-pink-800 whitespace-pre-line">${text}</p>`;
+        showModal('השיר הושלם!', '🎶 שיר חדש לינאי!', 'pink');
+    } catch (error) {
+        console.error("❌ Song generation failed:", error);
+        outputEl.innerHTML = `<p class="text-red-500">שגיאה ביצירת השיר: ${error.message}</p>`;
+    } finally {
+        setButtonLoading('song-button', false, 'צור את השיר');
+    }
+}
+window.generateSong = generateSong;
+
+        
+      // --- FACT GENERATION (using Google Search grounding) ---
+const FACTS_QUERIES = [
+    "עובדה היסטורית מעניינת על שנת 1981",
+    "עובדה על גיל 44 במונחים פסיכולוגיים או היסטוריים",
+    "מה היו חדשות פופולריות ביום ההולדת של ינאי בשנת 1981",
+    "עובדה משעשעת על גיל 44 או על שנות ה-80 בישראל",
+    "נתון טריוויה מדהים על ספורט או מדע בשנת 1981"
+];
+
+// משתנה גלובלי שיזכור באיזה עובדה אנחנו
+let factIndex = 0;
+
+async function showNextFact() {
+    const outputEl = document.getElementById('fact-output');
+    const buttonEl = document.getElementById('fact-button');
+
+    if (!outputEl || !buttonEl) {
+        console.warn("⚠️ אלמנט fact-output או fact-button לא נמצא ב־HTML");
+        return;
+    }
+
+    setButtonLoading('fact-button', true, 'טוען עובדה...');
+    outputEl.innerHTML = `<span class="text-green-600 animate-pulse">מחפש מידע עדכני... 🌍</span>`;
+
+    // בחירת שאילתא לפי אינדקס עובר
+    const userQuery = FACTS_QUERIES[factIndex % FACTS_QUERIES.length];
+    factIndex++;
+
+    const systemPrompt = "אתה היסטוריון ואיש טריוויה. כתוב עובדה אחת, קצרה ומעניינת, בעברית קולחת, בהתבסס על מידע עדכני. אל תכלול כותרות, מקורות או ציטוטים — רק את העובדה עצמה.";
+
+    try {
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${window.TEXT_MODEL || "gemini-2.0-pro"}:generateContent`;
+
+        const payload = {
+            contents: [{ parts: [{ text: userQuery }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            tools: [{ "google_search": {} }] // שימוש בחיפוש לאיסוף עובדות אמיתיות
+        };
+
+        const result = await fetchAI(apiUrl, payload);
+        const text = result?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() 
+            || "לא נמצאה עובדה מעניינת הפעם. נסה שוב 🔄";
+
+        outputEl.innerHTML = `<p class="text-green-800 whitespace-pre-line">${text}</p>`;
+
+    } catch (error) {
+        console.error("❌ Fact generation failed:", error);
+        outputEl.innerHTML = `<p class="text-red-500">שגיאה בטעינת עובדה: ${error.message}</p>`;
+    } finally {
+        setButtonLoading('fact-button', false, 'עובדה הבאה!');
+    }
+}
+
+window.showNextFact = showNextFact;
 
 
         // --- SUMMARY AI LOGIC ---
