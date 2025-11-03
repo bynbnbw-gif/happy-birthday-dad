@@ -723,8 +723,6 @@ window.handleFileSelection = handleFileSelection;
 
 
 // --- AUDIO RECORDING ---
-let recorder, audioChunks = [], recordedBlob = null, isRecording = false;
-
 async function startRecording() {
   if (isRecording) return;
   isRecording = true;
